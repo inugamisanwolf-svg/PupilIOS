@@ -22,6 +22,11 @@ struct RootView: View {
     }
 
     @ObservedObject private var themeStore = ThemeStore.shared
+    @ObservedObject private var editSession = ThemeEditSession.shared
+
+    /// 実際に `TabView` へ与えている revision。編集中は据え置く
+    /// （`ThemeEditSession` の説明を参照）。
+    @State private var appliedRevision: Int = 0
 
     @State private var selection: Tab = .browse
 
@@ -53,8 +58,19 @@ struct RootView: View {
             }
             // テーマ変更で全画面の色を作り直す。`selection` はこの外側の
             // `@State` なので、作り直してもタブは動かない。
-            .id(themeStore.revision)
+            .id(appliedRevision)
         }
         .tint(AstryxTheme.shared.accent)
+        .onChange(of: themeStore.revision) { newValue in
+            // 編集中は反映を待つ（1 タップごとに作り直すと編集画面が閉じる）。
+            if !editSession.isEditing {
+                appliedRevision = newValue
+            }
+        }
+        .onChange(of: editSession.isEditing) { isEditing in
+            if !isEditing {
+                appliedRevision = themeStore.revision
+            }
+        }
     }
 }

@@ -121,7 +121,9 @@ struct ThemeEditorView: View {
 
                 HStack(spacing: 8) {
                     samplePill("ボタン", background: theme.accent, foreground: theme.onAccent, theme: theme)
-                    samplePill("危険", background: theme.danger, foreground: theme.onAccent, theme: theme)
+                    samplePill("危険", background: theme.danger,
+                               foreground: AstryxContrast.readableForeground(on: theme.danger),
+                               theme: theme)
                 }
             }
             .padding(14)

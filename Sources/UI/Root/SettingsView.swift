@@ -114,6 +114,10 @@ struct SettingsView: View {
                     Group {
                         NavigationLink {
                             ThemeEditorView()
+                                // 編集中は `RootView` の作り直しを見送らせる
+                                // （1 タップごとに画面が閉じるのを防ぐ）。
+                                .onAppear { ThemeEditSession.shared.beginEditing() }
+                                .onDisappear { ThemeEditSession.shared.endEditing() }
                         } label: {
                             Label("テーマと壁紙", systemImage: "paintpalette")
                         }

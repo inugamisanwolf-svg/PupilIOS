@@ -220,7 +220,7 @@ static var shared: AstryxTheme { AstryxTheme(palette: ThemeStore.shared.palette)
 
 ```swift
 static func borderOpacity(forHex hex: String) -> Double {
-    AstryxHex.luminance(hex) < 0.10 ? 0.30 : 0.12   // ほぼ黒い境界色は 12% では見えないので持ち上げる
+    AstryxHex.relativeLuminance(hex) < 0.02 ? 0.30 : 0.12   // ほぼ黒い境界色は 12% では見えないので持ち上げる
 }
 ```
 
@@ -240,13 +240,25 @@ static func borderOpacity(forHex hex: String) -> Double {
 
 | キー | 式 | `pink` の結果 |
 |---|---|---|
-| `onAccent` | accent の相対輝度 > 0.55 なら `#111111`（= `--color-on-accent`）、else `#FFFFFF` | `#FFFFFF` |
+| `onAccent` | 黒（`#111111` = `--color-on-accent`）と白のうち、accent 上のコントラストが高い方 | `#111111` |
 | `surfaceRaised` | `mix(surface, #FFFFFF, 6%)` | `#2C262A` |
-| `textSecondary` | `mix(textPrimary, background, 42%)` | `#9E9A9C` |
+| `textSecondary` | `mix(textPrimary, background, 42%)` | `#9C9B9C` |
 | `border` | `#FFFFFF`（描画時 alpha 0.12） | `#FFFFFF` |
 | `danger` | `#FF705D`（Astryx `--color-error` dark） | `#FF705D` |
 
-`astryx` だけは全キーが `AstryxTokens` の実値（`surfaceRaised = #303030`, `textSecondary = #9E9E9E`, `onAccent = #111111`）。`.astryx` に対して上記の式を適用しても同じ値になることは確認済み。
+実際に計算した全プリセットの値（Swift の式をそのまま再現した実測）:
+
+| プリセット | `onAccent` | `surfaceRaised` | `textSecondary` | accent 相対輝度 | `onAccent` のコントラスト |
+|---|---|---|---|---|---|
+| `astryx` | `#111111`（トークン値） | `#303030`（トークン値 / 式だと `#333333`） | `#9E9E9E`（トークン値 / 式だと `#9F9F9F`） | 0.880 | 16.72:1 |
+| `midnight` | `#111111` | `#22282E` | `#999A9C` | 0.378 | 7.69:1 |
+| `pink` | `#111111` | `#2C262A` | `#9C9B9C` | 0.312 | 6.52:1 |
+| `purple` | `#111111` | `#2A2633` | `#9B9B9F` | 0.297 | 6.25:1 |
+| `tiffany` | `#111111` | `#242D2C` | `#9A9C9C` | 0.385 | 7.83:1 |
+
+**経緯（実測）**: 当初は「相対輝度 > 0.55 なら黒文字」という単純なしきい値だったが、`pink` の accent `#FF5C9A` は輝度 0.312 で白文字になり、コントラスト **2.90:1**（WCAG AA 4.5:1 未満）で読めなかった。そこで `AstryxHex.bestContrastForeground(on:)`（黒と白のコントラストを比較して高い方を選ぶ。交差点は両者とも約 4.58:1）に変更し、全プリセットが 6.25:1 以上になった。`danger` `#FF705D` 上のラベルも同じ規則（黒 6.95:1 / 白 2.72:1）で黒を選ぶ。
+
+**注意**: `.astryx` だけはトークン実値を直接使い、導出式は使わない（式だと `surfaceRaised` が `#333333`、`textSecondary` が `#9F9F9F` になり、Astryx 実値 `#303030` / `#9E9E9E` とわずかにずれるため）。`onAccent` は式でも `#111111` で一致する。
 
 ### 7.3 壁紙プリセット実値
 
@@ -271,7 +283,7 @@ static func borderOpacity(forHex hex: String) -> Double {
 
 ```swift
 static func scrimOpacity(forBackgroundHex hex: String) -> Double {
-    let luminance = AstryxHex.luminance(hex)
+    let luminance = AstryxHex.relativeLuminance(hex)
     if luminance >= 0.5 { return 0.10 }                       // 明るいテーマは画像を活かす
     return min(0.35, max(0.18, 0.35 - luminance * 0.4))       // 暗いテーマほど濃く
 }

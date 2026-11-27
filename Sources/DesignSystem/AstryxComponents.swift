@@ -154,8 +154,11 @@ struct AstryxButtonStyle: ButtonStyle {
 
     private func foreground(_ theme: AstryxTheme) -> Color {
         switch variant {
-        case .primary, .destructive:
+        case .primary:
             return theme.onAccent
+        case .destructive:
+            // danger の上は文字色をコントラストから決める（--color-on-error 相当）。
+            return AstryxContrast.readableForeground(on: theme.danger)
         case .secondary, .ghost:
             return theme.textPrimary
         }
@@ -268,37 +271,32 @@ struct AstryxProgressDots: View {
 
 // MARK: - コントラスト補助
 
-/// `Color` の相対輝度から読みやすい文字色を選ぶ。
+/// 背景色の上で読みやすい文字色を選ぶ（黒/白のコントラスト比較）。
 enum AstryxContrast {
 
+    /// 任意の背景色に対して、`#111111` と白のうちコントラストが高い方を返す。
     static func readableForeground(on background: Color) -> Color {
-        luminance(of: background) > 0.55
-            ? AstryxTheme.shared.onAccent
-            : AstryxTheme.shared.textPrimary
+        AstryxHex.color(readableHexForeground(on: AstryxHex.string(from: background)))
     }
 
+    /// 相対輝度（WCAG。0 = 黒、1 = 白）。
     static func luminance(of color: Color) -> Double {
-        var red: CGFloat = 0
-        var green: CGFloat = 0
-        var blue: CGFloat = 0
-        var alpha: CGFloat = 0
-        let ui = UIColor(color)
-        guard ui.getRed(&red, green: &green, blue: &blue, alpha: &alpha) else { return 0 }
-        return 0.2126 * Double(red) + 0.7152 * Double(green) + 0.0722 * Double(blue)
+        AstryxHex.relativeLuminance(AstryxHex.string(from: color))
     }
 
     // MARK: hex（テーマプリセット生成用・MainActor 非依存）
 
-    /// accent の hex から、その上に載せる文字色の hex を返す。
-    /// 明るい accent には Astryx の `--color-on-accent`（#111111）、暗い accent には白。
+    /// 背景 hex の上に載せる文字色の hex。
+    /// 明るい色には Astryx の `--color-on-accent`（`#111111`）、暗い色には白。
+    /// どちらを選んでも最低 4.58:1 になる（黒と白のコントラストが交差する点）。
     static func readableHexForeground(on hex: String) -> String {
-        AstryxHex.luminance(hex) > 0.55 ? AstryxTokens.onAccent : "#FFFFFF"
+        AstryxHex.bestContrastForeground(on: hex)
     }
 
     /// 画像壁紙の上に敷く黒スクリムの不透明度（0〜0.35）。
     /// テーマの背景が暗いほど濃くして、本文のコントラストを確保する。
     static func scrimOpacity(forBackgroundHex hex: String) -> Double {
-        let luminance = AstryxHex.luminance(hex)
+        let luminance = AstryxHex.relativeLuminance(hex)
         if luminance >= 0.5 {
             return 0.10    // 明るいテーマは画像をほぼそのまま見せる
         }

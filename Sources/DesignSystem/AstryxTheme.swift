@@ -173,8 +173,8 @@ struct AstryxTheme {
     /// `--color-border`（白 + alpha 0x1A ≈ 0.102）相当の不透明度。
     /// パレット側は不透明 hex なので、明るさに応じて掛け率を決める。
     static func borderOpacity(forHex hex: String) -> Double {
-        let luminance = AstryxHex.luminance(hex)
-        if luminance < 0.10 { return 0.30 }   // ほぼ黒い境界色は 12% では見えない
+        let luminance = AstryxHex.relativeLuminance(hex)
+        if luminance < 0.02 { return 0.30 }   // ほぼ黒い境界色は 12% では見えない
         return 0.12
     }
 }
@@ -235,10 +235,26 @@ enum AstryxHex {
         return String(format: "#%02X%02X%02X", r, g, b)
     }
 
-    /// 相対輝度（sRGB 値をそのまま重み付け。AstryxContrast と同じ式）。
-    static func luminance(_ hex: String) -> Double {
+    /// 相対輝度（WCAG 2.x の sRGB リニア化を挟む式）。コントラスト判定に使う。
+    static func relativeLuminance(_ hex: String) -> Double {
         let components = rgb(hex)
-        return 0.2126 * components.r + 0.7152 * components.g + 0.0722 * components.b
+
+        func channel(_ value: Double) -> Double {
+            value <= 0.03928 ? value / 12.92 : pow((value + 0.055) / 1.055, 2.4)
+        }
+
+        return 0.2126 * channel(components.r)
+            + 0.7152 * channel(components.g)
+            + 0.0722 * channel(components.b)
+    }
+
+    /// 黒（#111111）と白（#FFFFFF）のうち、指定色の上でコントラストが高い方を返す。
+    /// 交差するのは両者とも約 4.6:1 になる点なので、どちらを選んでも AA を満たす。
+    static func bestContrastForeground(on background: String) -> String {
+        let luminance = relativeLuminance(background)
+        let black = (luminance + 0.05) / 0.05
+        let white = 1.05 / (luminance + 0.05)
+        return black >= white ? "#111111" : "#FFFFFF"
     }
 
     /// `a` を `b` に `ratio`（0...1）だけ寄せる。

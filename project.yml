@@ -1,4 +1,4 @@
-name: PupilIOS
+﻿name: PupilIOS
 options:
   bundleIdPrefix: dev.inugami
   deploymentTarget:
@@ -11,7 +11,7 @@ settings:
     SWIFT_VERSION: "5.0"
     IPHONEOS_DEPLOYMENT_TARGET: "16.0"
     MARKETING_VERSION: "1.0.4"
-    CURRENT_PROJECT_VERSION: "5"
+    CURRENT_PROJECT_VERSION: "6"
     CODE_SIGN_STYLE: Manual
     CODE_SIGNING_ALLOWED: NO
     CODE_SIGNING_REQUIRED: NO
