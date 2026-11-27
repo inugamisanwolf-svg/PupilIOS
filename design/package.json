@@ -1,16 +1,16 @@
 {
-  "name": "design",
+  "name": "pupilios-design",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "private": true,
+  "description": "Astryx bundle build for PupilIOS (React 19 + @astryxdesign/core + theme-neutral -> Resources/astryx)",
+  "type": "module",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "build": "node build.mjs",
+    "versions": "node -e \"for (const p of ['@astryxdesign/core','@astryxdesign/theme-neutral','react','react-dom','@stylexjs/stylex','esbuild']) console.log(p, require(p + '/package.json').version)\""
   },
-  "keywords": [],
-  "type": "commonjs",
   "dependencies": {
-    "@astryxdesign/core": "^0.7.17",
-    "@astryxdesign/theme-neutral": "^0.7.17",
+    "@astryxdesign/core": "0.7.17",
+    "@astryxdesign/theme-neutral": "0.7.17",
     "@stylexjs/stylex": "^0.19.2",
     "react": "^19.3.1",
     "react-dom": "^19.3.1"

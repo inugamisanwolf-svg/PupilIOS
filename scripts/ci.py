@@ -163,12 +163,17 @@ def dispatch(tok: str, ref: str = DEFAULT_REF) -> None:
 
 
 def list_runs(tok: str, limit: int = 10) -> list[dict]:
-    path = (
-        f"/repos/{OWNER}/{REPO}/actions/workflows/{WORKFLOW}/runs"
-        f"?per_page={limit}&branch={DEFAULT_REF}"
-    )
+    """Repo-level run list, filtered client-side to our workflow.
+
+    The workflow-scoped endpoint 404s until GitHub has registered the workflow
+    file, so the repo-level list is the reliable one.
+    """
+    path = f"/repos/{OWNER}/{REPO}/actions/runs?per_page={max(limit * 3, 30)}"
     data = api_json(path, tok)
-    return (data or {}).get("workflow_runs", [])
+    runs = (data or {}).get("workflow_runs", [])
+    ours = [r for r in runs if r.get("name") == "ios-build"
+            or WORKFLOW in (r.get("path") or "")]
+    return (ours or runs)[:limit]
 
 
 def latest_run(tok: str, since_ts: float | None = None) -> dict | None:
@@ -225,13 +230,31 @@ def fetch_logs(tok: str, run_id: int) -> dict[str, str]:
 
 def _rel(path: str) -> str:
     p = path.replace("\\", "/")
-    idx = p.find("/PupilIOS/")
+    # runner paths look like /Users/runner/work/PupilIOS/PupilIOS/Sources/...
+    idx = p.rfind("/PupilIOS/PupilIOS/")
+    if idx >= 0:
+        p = p[idx + len("/PupilIOS/PupilIOS/"):]
+    idx = p.rfind("/PupilIOS/")
     if idx >= 0:
         p = p[idx + len("/PupilIOS/"):]
+    p = p.lstrip("/")
+    if p.startswith("PupilIOS/"):
+        p = p[len("PupilIOS/"):]
     idx = p.find("/Sources/")
-    if idx >= 0 and p.startswith("/"):
+    if idx > 0:
         p = p[idx + 1:]
     return p
+
+
+SHELL_ECHO_HINTS = ("| tail", "grep -q", "tee build.log", "2>&1 |", "set -o pipefail")
+
+
+def _is_shell_echo(line: str) -> bool:
+    """Filter the workflow's own `run:` lines, which contain the word 'error:'."""
+    if line.startswith(("\x1b[", "\u001b[")) or "\\x1b[" in line:
+        return True
+    body = line.lstrip("+ ").strip()
+    return any(h in body for h in SHELL_ECHO_HINTS)
 
 
 def extract_errors(streams: dict[str, str]) -> list[dict]:
@@ -243,6 +266,8 @@ def extract_errors(streams: dict[str, str]) -> list[dict]:
             # strip the CI timestamp prefix ("2026-11-27T09:12:33.1234567Z ")
             line = re.sub(r"^\d{4}-\d\d-\d\dT[\d:.]+Z\s", "", line).strip()
             if "error:" not in line and "warning:" not in line:
+                continue
+            if _is_shell_echo(line):
                 continue
             m = ERROR_RE.match(line)
             if m:
@@ -364,7 +389,7 @@ def main() -> None:
     p = sub.add_parser("wait")
     p.add_argument("--run-id", type=int)
     p.add_argument("--timeout", type=int, default=2700)
-    p.set_defaults(func=lambda a, t: print(wait(t, a.run_id, a.timeout)))
+    p.set_defaults(func=lambda a, t: _wait_cmd(t, a.run_id, a.timeout))
 
     p = sub.add_parser("logs")
     p.add_argument("--run-id", type=int, required=True)
@@ -380,6 +405,12 @@ def main() -> None:
 
     args = ap.parse_args()
     args.func(args, token())
+
+
+def _wait_cmd(tok: str, run_id: int | None, timeout: int) -> None:
+    run = wait(tok, run_id, timeout)
+    print(f"run {run['id']} -> {run['html_url']}")
+    print(f"conclusion: {run.get('conclusion')}")
 
 
 def _status(tok: str, limit: int = 10) -> None:

@@ -1,0 +1,118 @@
+name: smoke
+
+# Temporary foundation check: proves brew/xcodegen/xcodebuild/zip/plistbuddy/
+# upload-artifact all work on the runner, using a throwaway minimal SwiftUI app.
+# Triggered manually only; deleted once the real pipeline is green.
+on:
+  workflow_dispatch:
+
+jobs:
+  smoke:
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - name: Toolchain
+        run: |
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+          sw_vers
+
+      - name: Install XcodeGen
+        run: brew install xcodegen && xcodegen --version
+
+      - name: Scaffold a minimal SwiftUI app
+        run: |
+          set -euo pipefail
+          WORK="$RUNNER_TEMP/smoke"
+          mkdir -p "$WORK/Sources" "$WORK/Resources/Assets.xcassets/AppIcon.appiconset"
+          cat > "$WORK/project.yml" <<'YML'
+          name: Smoke
+          options:
+            bundleIdPrefix: dev.inugami
+            deploymentTarget:
+              iOS: "16.0"
+          settings:
+            base:
+              SWIFT_VERSION: "5.0"
+              CODE_SIGN_STYLE: Manual
+              CODE_SIGNING_ALLOWED: NO
+              CODE_SIGNING_REQUIRED: NO
+              ENABLE_BITCODE: NO
+          targets:
+            Smoke:
+              type: application
+              platform: iOS
+              sources:
+                - path: Sources
+                - path: Resources
+                  excludes: ["Info.plist"]
+              settings:
+                base:
+                  PRODUCT_BUNDLE_IDENTIFIER: dev.inugami.smoke
+                  INFOPLIST_FILE: Resources/Info.plist
+                  GENERATE_INFOPLIST_FILE: NO
+          schemes:
+            Smoke:
+              build:
+                targets:
+                  Smoke: all
+          YML
+          cat > "$WORK/Sources/SmokeApp.swift" <<'SWIFT'
+          import SwiftUI
+
+          @main
+          struct SmokeApp: App {
+              var body: some Scene {
+                  WindowGroup { Text("smoke") }
+              }
+          }
+          SWIFT
+          cat > "$WORK/Resources/Info.plist" <<'PLIST'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>CFBundleExecutable</key><string>$(EXECUTABLE_NAME)</string>
+              <key>CFBundleIdentifier</key><string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+              <key>CFBundleName</key><string>$(PRODUCT_NAME)</string>
+              <key>CFBundlePackageType</key><string>APPL</string>
+              <key>CFBundleShortVersionString</key><string>1.0.0</string>
+              <key>CFBundleVersion</key><string>1</string>
+              <key>MinimumOSVersion</key><string>16.0</string>
+              <key>UILaunchScreen</key><dict/>
+          </dict>
+          </plist>
+          PLIST
+          cat > "$WORK/Resources/Assets.xcassets/Contents.json" <<'JSON'
+          { "info": { "author": "xcode", "version": 1 } }
+          JSON
+          echo '{
+            "images" : [ { "idiom" : "universal", "platform" : "ios", "size" : "1024x1024" } ],
+            "info" : { "author" : "xcode", "version" : 1 }
+          }' > "$WORK/Resources/Assets.xcassets/AppIcon.appiconset/Contents.json"
+          cd "$WORK"
+          xcodegen generate --spec project.yml
+          ls -la
+
+      - name: Build + package
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/smoke"
+          xcodebuild -project Smoke.xcodeproj -scheme Smoke -sdk iphoneos \
+            -configuration Release -derivedDataPath build \
+            -destination 'generic/platform=iOS' \
+            CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO \
+            build 2>&1 | tee build.log | grep -E "error:|BUILD" | tail -n 40
+          APP="build/Build/Products/Release-iphoneos/Smoke.app"
+          test -d "$APP"
+          mkdir -p Payload && cp -R "$APP" Payload/
+          zip -qry Smoke-unsigned.ipa Payload
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Info.plist"
+          unzip -l Smoke-unsigned.ipa | head -20
+          ls -lh Smoke-unsigned.ipa
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: smoke-ipa
+          path: ${{ runner.temp }}/smoke/Smoke-unsigned.ipa
+          if-no-files-found: error
