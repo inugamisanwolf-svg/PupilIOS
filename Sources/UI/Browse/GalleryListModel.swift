@@ -47,6 +47,9 @@ final class GalleryListModel: ObservableObject {
     private var plannedIDs: [Int] = []
     private var plannedReady: Bool = false
     private var seenIDs: Set<Int> = []
+    /// 取得に失敗したページの ID。次の試行でこの窓から取り直す
+    /// （そのまま捨てると、失敗したページの ID が二度と出てこない）。
+    private var pendingIDs: [Int] = []
 
     // MARK: - 状態
 
@@ -103,7 +106,7 @@ final class GalleryListModel: ObservableObject {
     /// 無限スクロール。末尾から 6 件以内に入ったカードで次のページを要求する。
     func loadMoreIfNeeded(current: GalleryBlock?) async {
         guard let current = current else { return }
-        guard !loading, errorMessage == nil, hasMore else { return }
+        guard !loading, errorMessage == nil, hasMore, !blocks.isEmpty else { return }
         guard let index = blocks.firstIndex(where: { $0.id == current.id }) else { return }
         let threshold = max(blocks.count - 6, 0)
         if index >= threshold {
@@ -118,6 +121,7 @@ final class GalleryListModel: ObservableObject {
         blocks = []
         stagedIDs = []
         seenIDs = []
+        pendingIDs = []
         remoteOffset = 0
         remoteExhausted = false
         plannedIDs = []
@@ -150,17 +154,55 @@ final class GalleryListModel: ObservableObject {
             let fetched = await GalleryListModel.fetchBlocks(ids: ids)
             guard gen == generation else { return }
 
-            blocks.append(contentsOf: fetched)
+            if fetched.isEmpty {
+                // ID は取れたのにカードが 1 枚も作れなかった（404 / 429 /
+                // タイムアウト / 切断）。ここで id を捨てるとそのページが
+                // 永久に欠番になるので、次の試行に回して止める。
+                // 空のまま `pageCount` を進めると、末尾のカードが現れないので
+                // onAppear も発火せず、無言で止まったままになる。
+                pendingIDs = ids
+                errorMessage = "ギャラリー情報を取得できませんでした。通信状況を確認して再試行してください。"
+                loading = false
+                return
+            }
+
+            // `ForEach(blocks)` / `LazyVGrid` の id は GalleryBlock.id なので、
+            // 同じ ID が 2 枚入ると描画が壊れる（SwiftUI の id 重複）。
+            // 供給側で落とせない経路（検索結果の重複など）に備えてここでも弾く。
+            let known = Set(blocks.map { $0.id })
+            let fresh = fetched.filter { !known.contains($0.id) }
+            if !fresh.isEmpty {
+                blocks.append(contentsOf: fresh)
+            }
             pageCount += 1
             loading = false
         } catch {
             guard gen == generation else { return }
-            errorMessage = GalleryListModel.describe(error)
             loading = false
+            if Task.isCancelled || GalleryListModel.isCancellation(error) {
+                // タブ移動 / 条件変更で `.task` がキャンセルされただけ。
+                // エラー面を出すと、戻ってきたときに一覧が「失敗」のまま残る。
+                return
+            }
+            errorMessage = GalleryListModel.describe(error)
         }
     }
 
+    /// キャンセルは失敗ではない（`URLSession` は `URLError(.cancelled)` を投げる）。
+    nonisolated static func isCancellation(_ error: Error) -> Bool {
+        if error is CancellationError { return true }
+        if let urlError = error as? URLError, urlError.code == .cancelled { return true }
+        return false
+    }
+
     private func idsForNextPage(source: GalleryListSource) async throws -> [Int] {
+        // 前回カード化に失敗した窓を先に消化する（順序を保ったまま取り直す）。
+        if !pendingIDs.isEmpty {
+            let retry = pendingIDs
+            pendingIDs = []
+            return retry
+        }
+
         switch source {
         case .browse(let sort, let language):
             try await fillStaged(sort: sort, language: language, needed: perPage)
@@ -209,9 +251,18 @@ final class GalleryListModel: ObservableObject {
                 total = window.total
             }
 
+            var added = 0
             for id in window.ids where !seenIDs.contains(id) {
                 seenIDs.insert(id)
                 stagedIDs.append(id)
+                added += 1
+            }
+
+            // 新しい ID が 1 件も増えない窓は、nozomi 側がずれている
+            // （＝これ以上先へ進んでも同じものが返る）。回り続けないよう打ち切る。
+            if added == 0 {
+                remoteExhausted = true
+                break
             }
 
             if window.ids.count < GalleryListModel.windowSize {

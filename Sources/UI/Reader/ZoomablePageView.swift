@@ -194,6 +194,15 @@ final class ZoomScrollView: UIScrollView, UIScrollViewDelegate {
     ///
     /// Two fingers still pan at fit scale, but `contentSize` equals the fitted
     /// image, so there is nothing for them to move.
+    ///
+    /// This is the documented knob for exactly this job: UIKit exposes a scroll
+    /// view's `panGestureRecognizer` so a client "can more precisely control which
+    /// pan gestures are recognized by the scroll view", and
+    /// `UIPanGestureRecognizer.minimumNumberOfTouches` is a plain settable `Int`
+    /// (default `1`) with no scroll-view-specific restriction. Only the *delegate*
+    /// is off limits -- UIKit kills the process for that. `maximumNumberOfTouches`
+    /// is deliberately left alone: it defaults to `NSUIntegerMax`, so a minimum of
+    /// two is already inside the allowed window.
     private func updatePanAvailability() {
         let touches = (isUserZooming || !isAtFitScale) ? 1 : 2
 
@@ -207,11 +216,27 @@ final class ZoomScrollView: UIScrollView, UIScrollViewDelegate {
         }
     }
 
+    /// A pinch that gets interrupted (a call arrives, the app is backgrounded, the
+    /// page is recycled mid-gesture) can end without `scrollViewDidEndZooming`, and
+    /// a stranded `isUserZooming` would keep the pan on one finger at fit scale --
+    /// the page would then swallow the swipe the pager needs and the reader would
+    /// look frozen, with no crash to show for it. A view arriving in a window has
+    /// no gesture in flight, so that is where the flag is cleared.
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        isUserZooming = false
+        updatePanAvailability()
+    }
+
     // MARK: - State
 
     func beginLoading() {
         imageView.image = nil
         messageLabel.isHidden = true
+        // ここから先は「別のページ」なので、ピンチ状態は引き継がない。
+        // プログラムからの `setZoomScale` が `willBeginZooming` だけ呼んで
+        // `didEndZooming` を呼ばない経路があっても、フラグは必ず戻す。
+        isUserZooming = false
         setZoomScale(minimumZoomScale, animated: false)
         contentOffset = .zero
         contentInset = .zero
@@ -223,6 +248,7 @@ final class ZoomScrollView: UIScrollView, UIScrollViewDelegate {
 
     func endLoading(image: UIImage?) {
         spinner.stopAnimating()
+        isUserZooming = false
 
         guard let image = image, image.size.width > 0, image.size.height > 0 else {
             messageLabel.text = "このページを読み込めませんでした"
@@ -243,6 +269,7 @@ final class ZoomScrollView: UIScrollView, UIScrollViewDelegate {
     func show(image: UIImage) {
         spinner.stopAnimating()
         messageLabel.isHidden = true
+        isUserZooming = false
         imageView.image = image
         setZoomScale(minimumZoomScale, animated: false)
         updatePanAvailability()
@@ -254,6 +281,7 @@ final class ZoomScrollView: UIScrollView, UIScrollViewDelegate {
         imageView.image = nil
         messageLabel.isHidden = true
         spinner.stopAnimating()
+        isUserZooming = false
         setZoomScale(minimumZoomScale, animated: false)
         updatePanAvailability()
     }
@@ -278,8 +306,13 @@ final class ZoomScrollView: UIScrollView, UIScrollViewDelegate {
         )
 
         // While zoomed the scroll view drives the image view's geometry; refitting
-        // it here would fight the zoom.
-        guard zoomScale <= minimumZoomScale + 0.001 else { return }
+        // it here would fight the zoom. The same is true while the zoom engine is
+        // still animating: a pinch that dips under 1x (bouncesZoom) passes the
+        // `zoomScale` test below with the zoom engine mid-transform, and writing
+        // `transform = .identity` + `frame` then would tear the page. `isZooming`
+        // and `isZoomBouncing` are the scroll view's own read-only flags for that
+        // state, so neither can drift the way a hand-rolled flag can.
+        guard !isZooming, !isZoomBouncing, zoomScale <= minimumZoomScale + 0.001 else { return }
 
         let fitted = fittedSize(for: imageView.image?.size ?? .zero, in: size)
         if abs(imageView.bounds.width - fitted.width) > 0.5 || abs(imageView.bounds.height - fitted.height) > 0.5 {
@@ -344,6 +377,13 @@ final class ZoomScrollView: UIScrollView, UIScrollViewDelegate {
     func scrollViewDidEndZooming(_ scrollView: UIScrollView, with view: UIView?, atScale scale: CGFloat) {
         isUserZooming = false
         updatePanAvailability()
+
+        // ズームが落ち着いたら refit を1回だけ通す。`layoutSubviews` は
+        // ズーム中（`isZooming` / `isZoomBouncing`）に refit を止めるので、
+        // ここで一度レイアウトを要求しないと「回転やインセット変更をまたいだ
+        // ズーム戻し」のあと画像が古いサイズのまま残りうる。
+        // ループしないのは、これがズーム終了時に1回しか来ないから。
+        setNeedsLayout()
     }
 
     // MARK: - Gestures
@@ -358,10 +398,27 @@ final class ZoomScrollView: UIScrollView, UIScrollViewDelegate {
             return
         }
 
-        let target = min(doubleTapZoom, maximumZoom)
-        let point = gesture.location(in: self)
-        let width = bounds.width / target
-        let height = bounds.height / target
+        // 画像がまだ無い / レイアウト前のページで倍率だけ上げると、
+        // `layoutSubviews` の refit も `zoomScale > minimum` の分岐で止まる。
+        // その結果「何も無いのに 1 本指 pan がスワイプを飲む」状態になり、
+        // ページ送りだけが死ぬ（クラッシュしないので気付きにくい）。倍率は上げない。
+        guard imageView.image != nil else { return }
+
+        let box = bounds.size
+        guard box.width > 1, box.height > 1 else { return }
+        guard contentSize.width > 0, contentSize.height > 0 else { return }
+
+        let target = min(max(doubleTapZoom, minimumZoomScale), maximumZoomScale)
+        guard target > minimumZoomScale + 0.001 else { return }
+
+        // `zoom(to:)` は「この矩形が bounds いっぱいに広がる倍率」を計算するので、
+        // 矩形の大きさは `bounds / target` でなければ狙った倍率にならない。
+        // 位置だけは content 座標（= `imageView` の座標系。fit 倍率では frame の
+        // origin が .zero なのでそのまま content 座標になる）で作る。`self` 座標で
+        // 作ると `contentInset` のオフセット分だけ狙った場所からずれる。
+        let width = box.width / target
+        let height = box.height / target
+        let point = gesture.location(in: imageView)
         let rect = CGRect(
             x: point.x - width / 2,
             y: point.y - height / 2,

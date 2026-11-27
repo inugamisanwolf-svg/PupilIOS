@@ -16,6 +16,20 @@ struct SettingsView: View {
 
     private static let perPageOptions: [Int] = [12, 24, 36, 48, 60]
 
+    /// 1 ページ件数を `perPageOptions` のどれかに寄せる（近いほう）。
+    ///
+    /// Astryx 面のステッパは 10〜100 を 10 刻みで出すので、その値をそのまま
+    /// `Settings.perPage` に入れると `Picker` の選択肢と一致しなくなり、設定画面の
+    /// 行が空欄になる。保存・反映の前にここで丸める。
+    static func snappedPerPage(_ value: Int) -> Int? {
+        guard value > 0 else { return nil }
+        var best = perPageOptions[0]
+        for option in perPageOptions where abs(option - value) < abs(best - value) {
+            best = option
+        }
+        return best
+    }
+
     var body: some View {
         NavigationStack {
             Form {
@@ -86,6 +100,12 @@ struct SettingsView: View {
                         }
 
                         NavigationLink {
+                            AstryxAboutPage()
+                        } label: {
+                            Label("Astryx About 面", systemImage: "sparkles")
+                        }
+
+                        NavigationLink {
                             AboutView()
                         } label: {
                             Label("Pupil について", systemImage: "info.circle")
@@ -134,6 +154,32 @@ struct SettingsView: View {
             .tint(theme.accent)
             .navigationTitle("設定")
             .navigationBarTitleDisplayMode(.inline)
+            .onAppear { normalizeStoredSettings() }
+        }
+    }
+
+    /// 保存値の掃除。v1.0.1 までは Astryx 面の値をそのまま `Settings` に入れて
+    /// いたため、`Picker` の選択肢に無い値（perPage 10/20/…/100、未知の言語）が
+    /// UserDefaults に残っている端末がありうる。`Picker` の選択が tag と一致しないと
+    /// 行が空欄になるので、開いたときに丸め直す。
+    private func normalizeStoredSettings() {
+        if let snapped = SettingsView.snappedPerPage(settings.perPage) {
+            if snapped != settings.perPage { settings.perPage = snapped }
+        } else {
+            settings.perPage = 24
+        }
+
+        if SortMode(rawValue: settings.browseSort) == nil {
+            settings.browseSort = SortMode.popularWeek.rawValue
+        }
+
+        if !Settings.languages.contains(where: { $0.id == settings.browseLanguage }) {
+            settings.browseLanguage = "all"
+        }
+
+        if !settings.tagTranslation.isEmpty,
+           !TagTranslations.availableLanguages.contains(settings.tagTranslation) {
+            settings.tagTranslation = ""
         }
     }
 
@@ -206,26 +252,24 @@ private struct AstryxSettingsSurface: View {
     private var theme: AstryxTheme { AstryxTheme.shared }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: theme.space(.md)) {
-                Text("Astryx 設定パネル")
-                    .font(theme.font(.heading2))
-                    .foregroundColor(theme.textPrimary)
+        // 親に `ScrollView` を置かない。WKWebView は自身でスクロールするので、
+        // 二重スクロールは同じドラッグを奪い合い、小さい端末では面の下端に
+        // 届かなくなる。面は残りの高さいっぱいに広げる。
+        VStack(alignment: .leading, spacing: theme.space(.sm)) {
+            Text("Astryx コンポーネントで描いた面です。ここでの変更はネイティブの設定と同じ値に反映されます。")
+                .font(theme.font(.caption))
+                .foregroundColor(theme.textSecondary)
 
-                Text("Astryx コンポーネントで描いた面です。ここでの変更はネイティブの設定と同じ値に反映されます。")
-                    .font(theme.font(.caption))
-                    .foregroundColor(theme.textSecondary)
-
-                AstryxWebView(surface: .settings, payload: payload, onEvent: apply)
-                    .frame(height: 620)
-                    .clipShape(RoundedRectangle(cornerRadius: theme.radiusLarge, style: .continuous))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: theme.radiusLarge, style: .continuous)
-                            .stroke(theme.border, lineWidth: 1)
-                    )
-            }
-            .padding(theme.space(.md))
+            AstryxWebView(surface: .settings, payload: payload, onEvent: apply)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .clipShape(RoundedRectangle(cornerRadius: theme.radiusLarge, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: theme.radiusLarge, style: .continuous)
+                        .stroke(theme.border, lineWidth: 1)
+                )
         }
+        .padding(theme.space(.md))
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(theme.background.ignoresSafeArea())
         .navigationTitle("Astryx 設定")
         .navigationBarTitleDisplayMode(.inline)
@@ -270,10 +314,16 @@ private struct AstryxSettingsSurface: View {
         case "japaneseTitles":
             settings.japaneseTitles = (value == "true" || value == "1" || value == "on")
         case "tagTranslation":
-            settings.tagTranslation = value
+            // 同梱 tags/*.json に無い言語を入れると、設定の Picker が
+            // 一致する tag を失って空欄になる（表示だけの問題だが直せない）。
+            if value.isEmpty || TagTranslations.availableLanguages.contains(value) {
+                settings.tagTranslation = value
+            }
         case "perPage":
-            if let number = Int(value), number > 0 {
-                settings.perPage = number
+            // Astryx 面は 10〜100 を 10 刻みで出すので、そのまま入れると
+            // ネイティブの Picker（12/24/36/48/60）と一致しなくなる。
+            if let number = Int(value), let snapped = SettingsView.snappedPerPage(number) {
+                settings.perPage = snapped
             }
         case "theme":
             if ["system", "dark", "light"].contains(value) {
@@ -284,7 +334,8 @@ private struct AstryxSettingsSurface: View {
                 settings.browseSort = value
             }
         case "browseLanguage":
-            if !value.isEmpty {
+            // 未知の言語は nozomi の URL を 404 にするだけなので捨てる。
+            if Settings.languages.contains(where: { $0.id == value }) {
                 settings.browseLanguage = value
             }
         default:
@@ -297,8 +348,9 @@ private struct AstryxSettingsSurface: View {
 
 /// About。GPLv3 と移植元、Astryx の MIT を明記する。
 ///
-/// 表記は SwiftUI 側でも直に置き、Astryx の About 面はその上に重ねる形に
-/// してある（WebView が読めない環境でもライセンス表記が消えないように）。
+/// 表記は SwiftUI で直に置く（WebView が読めない環境でもライセンス表記が
+/// 消えないように）。Astryx の About 面は高さを固定できないので別ページ
+/// (`AstryxAboutPage`) に分けてある。
 private struct AboutView: View {
     private var theme: AstryxTheme { AstryxTheme.shared }
 
@@ -355,20 +407,32 @@ private struct AboutView: View {
                         .font(theme.font(.caption))
                         .foregroundColor(theme.textSecondary)
                 }
-
-                AstryxWebView(surface: .about, payload: aboutPayload, onEvent: handleEvent)
-                    .frame(height: 620)
-                    .clipShape(RoundedRectangle(cornerRadius: theme.radiusLarge, style: .continuous))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: theme.radiusLarge, style: .continuous)
-                            .stroke(theme.border, lineWidth: 1)
-                    )
             }
             .padding(theme.space(.md))
         }
         .background(theme.background.ignoresSafeArea())
         .navigationTitle("Pupil について")
         .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+// MARK: - Astryx About 面
+
+/// Astryx の About 面。
+///
+/// 高さを固定せずページいっぱいに広げる。`WKWebView` 自身がスクロールするので、
+/// 親に `ScrollView` を置くとドラッグを奪い合って面の下端に届かなくなる。
+/// ライセンス表記はネイティブ側 (`AboutView`) にも直書きしてあるので、この面が
+/// 描けなくても消えない。
+private struct AstryxAboutPage: View {
+    private var theme: AstryxTheme { AstryxTheme.shared }
+
+    var body: some View {
+        AstryxWebView(surface: .about, payload: aboutPayload, onEvent: handleEvent)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(theme.background.ignoresSafeArea())
+            .navigationTitle("Astryx About")
+            .navigationBarTitleDisplayMode(.inline)
     }
 
     private var aboutPayload: [String: String] {

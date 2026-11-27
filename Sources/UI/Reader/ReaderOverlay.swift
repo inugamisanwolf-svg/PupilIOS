@@ -104,8 +104,12 @@ struct ReaderOverlay: View {
 
             // dots は総ページ数が多いと潰れるので、少ないときだけ出す。
             // ページ番号そのものは上の `n / total` が常に持っている。
+            // `AstryxProgressDots.current` は 0 始まりの index（内部で
+            // `min(max(current, 0), total - 1)` にして 0..<total と比較する）。
+            // `shownPage` は 1 始まりのページ番号なので、そのまま渡すと
+            // 常に1つ右のドットが点灯する。
             if pageCount <= 30 {
-                AstryxProgressDots(current: shownPage, total: total)
+                AstryxProgressDots(current: shownPage - 1, total: total)
                     .frame(maxWidth: .infinity)
             }
         }

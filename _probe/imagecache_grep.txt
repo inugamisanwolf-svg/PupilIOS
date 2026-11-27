@@ -1,0 +1,37 @@
+4: import ImageIO
+16: /// - **表示前に ImageIO でダウンサンプリングする**（`image(for:maxPixelSize:)`）。
+17: ///   `CGImageSourceCreateThumbnailAtIndex` は圧縮データから直接縮小ビットマップを
+42: /// 呼び出し側が `image(for:maxPixelSize:)` で明示指定すれば上書きできる。
+43: static var maxPixelSize: CGFloat = 4096
+70: static func memoryKey(for url: URL, maxPixelSize: CGFloat?) -> String {
+72: guard let maxPixelSize = maxPixelSize, maxPixelSize > 0 else { return base + "|full" }
+73: return base + "|" + String(Int(maxPixelSize.rounded()))
+78: /// 既定の画素上限（`ImageCache.maxPixelSize`）で取得する。
+83: await image(for: url, maxPixelSize: ImageCache.maxPixelSize)
+87: func image(for url: URL, maxPixelSize: CGFloat?) async -> UIImage? {
+88: let key = ImageCache.memoryKey(for: url, maxPixelSize: maxPixelSize)
+98: let loaded = await cache.load(url: url, maxPixelSize: maxPixelSize, key: key)
+112: await image(for: url, maxPixelSize: nil)
+117: await prefetch(urls, maxPixelSize: ImageCache.maxPixelSize)
+121: func prefetch(_ urls: [URL], maxPixelSize: CGFloat?) async {
+123: _ = await image(for: url, maxPixelSize: maxPixelSize)
+130: memory.object(forKey: ImageCache.memoryKey(for: url, maxPixelSize: ImageCache.maxPixelSize) as NSString)
+134: func cachedImage(for url: URL, maxPixelSize: CGFloat?) -> UIImage? {
+135: memory.object(forKey: ImageCache.memoryKey(for: url, maxPixelSize: maxPixelSize) as NSString)
+152: private func load(url: URL, maxPixelSize: CGFloat?, key: String) async -> UIImage? {
+167: guard let image = ImageCache.decode(data: data, maxPixelSize: maxPixelSize) else { return nil }
+168: memory.setObject(image, forKey: key as NSString, cost: ImageCache.cost(of: image))
+172: /// 圧縮データから `UIImage` を作る。`maxPixelSize` 指定時は ImageIO で縮小する
+174: private static func decode(data: Data, maxPixelSize: CGFloat?) -> UIImage? {
+175: guard let source = CGImageSourceCreateWithData(data as CFData, nil) else {
+179: if let maxPixelSize = maxPixelSize, maxPixelSize > 0 {
+180: let side = Int(maxPixelSize.rounded())
+182: kCGImageSourceCreateThumbnailFromImageAlways: true,
+183: kCGImageSourceCreateThumbnailWithTransform: true,
+184: kCGImageSourceShouldCacheImmediately: true,
+185: kCGImageSourceThumbnailMaxPixelSize: side,
+187: if let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) {
+193: let fullOptions: [CFString: Any] = [kCGImageSourceShouldCacheImmediately: true]
+194: if let cgImage = CGImageSourceCreateImageAtIndex(source, 0, fullOptions as CFDictionary) {
+201: static func cost(of image: UIImage) -> Int {
+203: let bytes = cgImage.bytesPerRow * cgImage.height

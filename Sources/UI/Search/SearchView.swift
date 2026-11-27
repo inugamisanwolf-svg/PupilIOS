@@ -18,6 +18,8 @@ struct SearchView: View {
     @State private var suggestions: [Suggestion] = []
     @State private var localSuggestions: [String] = []
     @State private var didSeed: Bool = false
+    /// 実行中の検索。新しい検索を始めるときに前のものを畳む（下の説明）。
+    @State private var submitTask: Task<Void, Never>?
 
     init(initialQuery: String? = nil, embedsStack: Bool = true) {
         self.initialQuery = initialQuery
@@ -88,7 +90,7 @@ struct SearchView: View {
                 .autocorrectionDisabled(true)
                 .textInputAutocapitalization(.never)
                 .onSubmit {
-                    Task { await submit(text) }
+                    startSubmit(text)
                 }
 
             if !text.isEmpty {
@@ -107,51 +109,57 @@ struct SearchView: View {
         .padding(theme.space(.sm))
     }
 
+    /// サジェストは最大 13 行（外部 8 + 翻訳一致 5）になりうる。素の `VStack` だと
+    /// 縦に伸びて下の結果グリッドを画面外へ押し出し、「結果が出ない」ように見える。
+    /// 高さを抑えて自分でスクロールさせる。
     private var suggestionList: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            ForEach(suggestions) { suggestion in
-                Button {
-                    Task { await submit(suggestionText(suggestion)) }
-                } label: {
-                    HStack(spacing: theme.space(.sm)) {
-                        Text(suggestion.display)
-                            .font(theme.font(.body))
-                            .foregroundColor(theme.textPrimary)
-                            .lineLimit(1)
-                        Spacer(minLength: 0)
-                        Text("\(suggestion.count)")
-                            .font(theme.font(.caption))
-                            .foregroundColor(theme.textSecondary)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(suggestions) { suggestion in
+                    Button {
+                        startSubmit(suggestionText(suggestion))
+                    } label: {
+                        HStack(spacing: theme.space(.sm)) {
+                            Text(suggestion.display)
+                                .font(theme.font(.body))
+                                .foregroundColor(theme.textPrimary)
+                                .lineLimit(1)
+                            Spacer(minLength: 0)
+                            Text("\(suggestion.count)")
+                                .font(theme.font(.caption))
+                                .foregroundColor(theme.textSecondary)
+                        }
+                        .padding(.horizontal, theme.space(.sm))
+                        .padding(.vertical, theme.space(.xs))
+                        .contentShape(Rectangle())
                     }
-                    .padding(.horizontal, theme.space(.sm))
-                    .padding(.vertical, theme.space(.xs))
-                    .contentShape(Rectangle())
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
-            }
 
-            ForEach(localSuggestions, id: \.self) { tag in
-                Button {
-                    Task { await submit(tag) }
-                } label: {
-                    HStack(spacing: theme.space(.sm)) {
-                        Text(tag)
-                            .font(theme.font(.body))
-                            .foregroundColor(theme.textPrimary)
-                            .lineLimit(1)
-                        Spacer(minLength: 0)
-                        Text("翻訳一致")
-                            .font(theme.font(.caption))
-                            .foregroundColor(theme.textSecondary)
+                ForEach(localSuggestions, id: \.self) { tag in
+                    Button {
+                        startSubmit(tag)
+                    } label: {
+                        HStack(spacing: theme.space(.sm)) {
+                            Text(tag)
+                                .font(theme.font(.body))
+                                .foregroundColor(theme.textPrimary)
+                                .lineLimit(1)
+                            Spacer(minLength: 0)
+                            Text("翻訳一致")
+                                .font(theme.font(.caption))
+                                .foregroundColor(theme.textSecondary)
+                        }
+                        .padding(.horizontal, theme.space(.sm))
+                        .padding(.vertical, theme.space(.xs))
+                        .contentShape(Rectangle())
                     }
-                    .padding(.horizontal, theme.space(.sm))
-                    .padding(.vertical, theme.space(.xs))
-                    .contentShape(Rectangle())
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
             }
+            .padding(.vertical, theme.space(.xs))
         }
-        .padding(.vertical, theme.space(.xs))
+        .frame(maxHeight: 280)
         .background(theme.surfaceRaised)
     }
 
@@ -171,7 +179,7 @@ struct SearchView: View {
                         HStack(spacing: theme.space(.xs)) {
                             ForEach(library.searchHistory, id: \.self) { entry in
                                 AstryxChip(entry, selected: false) {
-                                    Task { await submit(entry) }
+                                    startSubmit(entry)
                                 }
                                 .contextMenu {
                                     Button(role: .destructive) {
@@ -196,8 +204,21 @@ struct SearchView: View {
         guard !didSeed else { return }
         didSeed = true
         if let initial = initialQuery, !initial.isEmpty {
-            await submit(initial)
+            startSubmit(initial)
         }
+    }
+
+    /// 検索を 1 本だけ走らせる。
+    ///
+    /// 送信・サジェスト・履歴チップはどれもすぐ `Task` を作っていたので、
+    /// 連打すると未完了の検索が重なった。この検索は `search()` が索引全体を
+    /// 取りに行くことがあり（`-tag` だけの問い合わせなど）、2 本並ぶと
+    /// 数十 MB の取得が二重に走ってホーム画面に戻されることがある。
+    /// 新規検索の開始時に前のものをキャンセルし、状態は `GalleryListModel` の
+    /// 世代番号で捨てる。
+    private func startSubmit(_ raw: String) {
+        submitTask?.cancel()
+        submitTask = Task { await submit(raw) }
     }
 
     private func clearSearch() {
@@ -241,7 +262,7 @@ struct SearchView: View {
     /// （`.task(id: text)` なので入力が続けば前のタスクはキャンセルされる）。
     private func refreshSuggestions() async {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty {
+        if trimmed.isEmpty || trimmed == submitted {
             suggestions = []
             localSuggestions = []
             return
@@ -257,7 +278,16 @@ struct SearchView: View {
             remote = (try? await HitomiClient.shared.suggestions(forQuery: body)) ?? []
         }
         if Task.isCancelled { return }
-        suggestions = Array(remote.prefix(8))
+
+        // `Suggestion.id` は "namespace|tag"。索引が同じ組を二度返すことがあり、
+        // そのまま `ForEach` に渡すと id 重複になるので一意化してから 8 件。
+        var seen = Set<String>()
+        var unique: [Suggestion] = []
+        for item in remote where seen.insert(item.id).inserted {
+            unique.append(item)
+            if unique.count >= 8 { break }
+        }
+        suggestions = unique
 
         var local: [String] = []
         let language = settings.tagTranslation

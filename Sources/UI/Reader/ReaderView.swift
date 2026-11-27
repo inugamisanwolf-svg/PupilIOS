@@ -180,6 +180,10 @@ struct ReaderView: View {
 
     @MainActor
     private func load() async {
+        // この3行の順序は契約。まず `phase` を落としてページャごと画面から
+        // 外し、そのあと配列を空にする。逆順にすると
+        // 「`pageURLs` は空 / `currentIndex` はまだ 37」という瞬間ができ、
+        // `TabView(selection:)` が範囲外の index を掴む。
         phase = .loading
         resolvedCount = 0
         pageURLs = []
@@ -203,6 +207,9 @@ struct ReaderView: View {
             gallery = loaded
             pageURLs = urls
 
+            // ここも順序が契約: 配列 → selection → `phase`。
+            // `phase = .ready` を先にすると、`TabView` が古い/短い配列と
+            // 新しい `currentIndex` の組み合わせで一瞬だけ構築される。
             let index = min(max(startPage, 0), urls.count - 1)
             currentIndex = index
 

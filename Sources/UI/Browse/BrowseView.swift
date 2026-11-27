@@ -79,8 +79,14 @@ struct BrowseView: View {
     private func syncSettingsAndLoad() async {
         if !didSyncSettings {
             didSyncSettings = true
-            let storedSort = settings.browseSort
-            let storedLanguage = settings.browseLanguage
+            // `Settings` の文字列は UserDefaults 由来なので、古い版や Astryx 面が
+            // 書いた未知の値が入っていることがある。そのまま `Picker` の選択に
+            // 渡すと選択肢と一致せず空欄になり、未知の言語は nozomi を 404 にする。
+            let storedSort = SortMode(rawValue: settings.browseSort)?.rawValue
+                ?? SortMode.popularWeek.rawValue
+            let storedLanguage = Settings.languages.contains { $0.id == settings.browseLanguage }
+                ? settings.browseLanguage
+                : "all"
 
             if sortRaw != storedSort {
                 sortRaw = storedSort

@@ -230,7 +230,10 @@ struct GalleryDetailView: View {
                 NavigationLink {
                     GalleryDetailView(galleryID: id)
                 } label: {
+                    // `AstryxChip` は中で Button なので、そのまま入れるとタップを
+                    // チップ側が食ってリンクが発火しないことがある。
                     AstryxChip(entry.name, selected: false) { }
+                        .allowsHitTesting(false)
                 }
                 .buttonStyle(.plain)
             }
@@ -329,7 +332,9 @@ struct GalleryDetailView: View {
         NavigationLink {
             SearchView(initialQuery: query, embedsStack: false)
         } label: {
+            // 同上: チップ内部の Button がタップを吸わないようにする。
             AstryxChip(label, selected: false) { }
+                .allowsHitTesting(false)
         }
         .buttonStyle(.plain)
     }
@@ -346,7 +351,11 @@ struct GalleryDetailView: View {
                     HStack(spacing: theme.space(.xs)) {
                         ForEach(Array(gallery.thumbnails.prefix(30).enumerated()), id: \.offset) { pair in
                             Button {
-                                readerPage = pair.offset
+                                // サムネは `try?` で落ちた分だけ詰めて並ぶので、
+                                // 添字がそのままページ番号とは限らない。せめて
+                                // pageCount の外へは出さない（Reader の初期位置）。
+                                guard gallery.pageCount > 0 else { return }
+                                readerPage = min(max(pair.offset, 0), gallery.pageCount - 1)
                                 showReader = true
                             } label: {
                                 Color.clear
@@ -426,13 +435,26 @@ struct GalleryDetailView: View {
         do {
             let fetched = try await HitomiClient.shared.gallery(galleryID)
             gallery = fetched
+            errorMessage = nil
 
-            let ids = Array(fetched.related.prefix(20))
+            // `related` に同じ ID が二度入ることがある。`relatedSection` は
+            // `ForEach(related)`（id は `GalleryBlock.id`）なので、重複したまま
+            // 積むと SwiftUI の id 重複になる。先に一意化してから先頭 20 件。
+            let ids = Array(GalleryListModel.uniqueIDs(fetched.related).prefix(20))
             var blocks = await GalleryListModel.fetchBlocks(ids: ids)
+            if Task.isCancelled {
+                loading = false
+                return
+            }
             blocks.removeAll { $0.id == galleryID }
             related = blocks
-            errorMessage = nil
         } catch {
+            if Task.isCancelled || GalleryListModel.isCancellation(error) {
+                // 画面を離れて `.task` がキャンセルされただけ。エラー面を出すと
+                // 戻ってきたときに「読み込み失敗」のまま残る。
+                loading = false
+                return
+            }
             errorMessage = GalleryListModel.describe(error)
         }
 
