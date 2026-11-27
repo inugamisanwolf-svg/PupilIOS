@@ -275,6 +275,24 @@ private func openExternalURL(_ string: String?) {
     UIApplication.shared.open(url, options: [:], completionHandler: nil)
 }
 
+/// Astryx の Web 面へ渡すテーマ色。
+///
+/// `ThemePalette` の hex（`#RRGGBB`）をそのまま渡し、JS 側が CSS 変数を差し替える。
+/// キー名は astryx-design の JS と固定（変えると色が当たらない）。
+private func astryxThemePayload(_ palette: ThemePalette) -> [String: String] {
+    [
+        "themeAccent": palette[.accent],
+        "themeOnAccent": palette[.onAccent],
+        "themeBackground": palette[.background],
+        "themeSurface": palette[.surface],
+        "themeSurfaceRaised": palette[.surfaceRaised],
+        "themeTextPrimary": palette[.textPrimary],
+        "themeTextSecondary": palette[.textSecondary],
+        "themeBorder": palette[.border],
+        "themeDanger": palette[.danger],
+    ]
+}
+
 // MARK: - Astryx 設定面
 
 /// 本物の Astryx を WKWebView で描いた設定面。
@@ -284,6 +302,8 @@ private func openExternalURL(_ string: String?) {
 /// 扱う（Astryx 側の実装がどちらでも動くようにするため）。
 private struct AstryxSettingsSurface: View {
     @ObservedObject var settings: Settings
+    /// カスタムテーマの色を `payload` に載せるために観測する。
+    @ObservedObject private var themeStore = ThemeStore.shared
 
     private var theme: AstryxTheme { AstryxTheme.shared }
 
@@ -313,7 +333,7 @@ private struct AstryxSettingsSurface: View {
 
     /// Astryx 面に渡す現在値。すべて文字列（`[String: String]`）。
     private var payload: [String: String] {
-        [
+        var values: [String: String] = [
             "appName": "Pupil",
             "japaneseTitles": settings.japaneseTitles ? "true" : "false",
             "tagTranslation": settings.tagTranslation,
@@ -325,6 +345,12 @@ private struct AstryxSettingsSurface: View {
             "sortModes": SortMode.allCases.map { "\($0.rawValue)=\($0.label)" }.joined(separator: ","),
             "tagTranslationLanguages": TagTranslations.availableLanguages.joined(separator: ","),
         ]
+
+        // カスタムテーマの色。`ThemeStore` を観測しているので、色が変われば
+        // この辞書が作り直され `updateUIView` 経由で JS へ渡る。
+        values.merge(astryxThemePayload(themeStore.palette)) { _, new in new }
+
+        return values
     }
 
     /// Astryx（JS）からのイベント。
@@ -461,6 +487,9 @@ private struct AboutView: View {
 /// ライセンス表記はネイティブ側 (`AboutView`) にも直書きしてあるので、この面が
 /// 描けなくても消えない。
 private struct AstryxAboutPage: View {
+    /// カスタムテーマの色を `aboutPayload` に載せるために観測する。
+    @ObservedObject private var themeStore = ThemeStore.shared
+
     private var theme: AstryxTheme { AstryxTheme.shared }
 
     var body: some View {
@@ -472,13 +501,17 @@ private struct AstryxAboutPage: View {
     }
 
     private var aboutPayload: [String: String] {
-        [
+        var values: [String: String] = [
             "appName": "Pupil",
             "version": PupilIOSAppInfo.version,
             "license": "GPL-3.0",
             "upstream": "https://codeberg.org/pupil/Pupil",
             "astryxLicense": "MIT",
         ]
+
+        values.merge(astryxThemePayload(themeStore.palette)) { _, new in new }
+
+        return values
     }
 
     /// About 面のイベント。`openurl` だけ拾う。

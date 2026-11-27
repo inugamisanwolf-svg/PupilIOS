@@ -67,6 +67,57 @@ function post(name, payload) {
 }
 
 /* -------------------------------------------------------------------------- */
+/* live theme bridge                                                           */
+/* -------------------------------------------------------------------------- */
+
+/*
+ * Swift pushes the app's custom theme as `theme*` hex keys. They are written to
+ * OUR css custom properties on <html>; design/src/pupil.css bridges
+ *   --color-accent: var(--pupil-accent, #f1f1f1)
+ * so every Astryx token (and therefore every Astryx component) follows without
+ * re-rendering anything in React. Keys are frozen — see docs/ASTRYX.md §7.8.
+ */
+
+const THEME_VAR_MAP = {
+  themeAccent: '--pupil-accent',
+  themeOnAccent: '--pupil-on-accent',
+  themeBackground: '--pupil-background',
+  themeSurface: '--pupil-surface',
+  themeSurfaceRaised: '--pupil-surface-raised',
+  themeTextPrimary: '--pupil-text-primary',
+  themeTextSecondary: '--pupil-text-secondary',
+  themeBorder: '--pupil-border',
+  themeDanger: '--pupil-danger',
+};
+
+const HEX_RE = /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/;
+
+function normalizeHex(value) {
+  if (typeof value !== 'string') return null;
+  const text = value.trim();
+  if (!HEX_RE.test(text)) return null;
+  if (text.length === 4) {
+    return ('#' + text[1] + text[1] + text[2] + text[2] + text[3] + text[3]).toUpperCase();
+  }
+  return text.toUpperCase();
+}
+
+function applyThemeVars(settings) {
+  if (!settings || typeof settings !== 'object') return;
+  const root = document.documentElement;
+  Object.keys(THEME_VAR_MAP).forEach((key) => {
+    if (!Object.prototype.hasOwnProperty.call(settings, key)) return; // 未指定 = 既定のまま
+    const value = settings[key];
+    if (typeof value === 'string' && value.trim() === '') {
+      root.style.removeProperty(THEME_VAR_MAP[key]); // 空文字で明示的に解除
+      return;
+    }
+    const hex = normalizeHex(value);
+    if (hex) root.style.setProperty(THEME_VAR_MAP[key], hex); // 不正な hex は無視
+  });
+}
+
+/* -------------------------------------------------------------------------- */
 /* state                                                                       */
 /* -------------------------------------------------------------------------- */
 
@@ -125,7 +176,9 @@ function emit() {
 }
 
 function applyPayload(input) {
-  store = { surface: store.surface, settings: Object.assign({}, store.settings, coerce(input)) };
+  const next = coerce(input);
+  store = { surface: store.surface, settings: Object.assign({}, store.settings, next) };
+  applyThemeVars(next);
   emit();
   return true;
 }
@@ -139,6 +192,8 @@ window.PupilAstryx = {
     return store.surface;
   },
   update: applyPayload,
+  applyThemeVars,
+  themeVarKeys: Object.keys(THEME_VAR_MAP),
   versions: {
     core: ASTRYX_CORE,
     theme: ASTRYX_THEME,

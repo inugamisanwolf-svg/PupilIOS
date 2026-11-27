@@ -4368,7 +4368,7 @@ body {
 }
 
 html {
-  background: #1b1b1b;
+  background: var(--color-background-body, #1b1b1b);
   -webkit-text-size-adjust: 100%;
   text-size-adjust: 100%;
 }
@@ -4401,54 +4401,83 @@ body {
      safe area, so no env(safe-area-inset-*) padding here. */
 }
 
-/* ---- theme-neutral (dark) token shim ------------------------------------ */
+/* ---- theme-neutral (dark) token shim + live theme bridge ---------------- */
+/*
+ * v1.0.5: the surface now follows the app's custom theme.
+ *
+ * `:root` below plays two roles:
+ *   1. Compatibility shim: iOS 16.0-16.3 WebKit has no `@scope` / `light-dark()`,
+ *      so theme.css' token declarations are dropped there. The fallback values on
+ *      the right-hand side of every `var()` are theme-neutral's DARK column
+ *      (theme.css:195-288) verbatim, so nothing changes when no theme is pushed.
+ *   2. Theme bridge: `--pupil-*` are OUR variables. `window.pupilUpdate()` sets
+ *      them on <html> from the Swift payload (keys documented in docs/ASTRYX.md
+ *      §7.8) and every Astryx token follows through `var(--pupil-x, <neutral>)`.
+ *
+ * Deliberately no `color-mix()` for the border token on the critical path: it is
+ * Safari 16.2+, so the plain `#ffffff1a` declaration comes first and a second,
+ * progressive-enhancement declaration overrides it where supported.
+ *
+ * Why `[class*="astryx-"]` is in the selector: StyleX emits the token block as
+ *   `:root, .xHASH{--color-accent: light-dark(#1b1b1b, #f1f1f1); ...}`
+ * inside `@layer astryx-base`, and every component root carries that hashed
+ * class. A `:root`-only rule therefore changes <html> but loses on the
+ * elements themselves (measured: button stayed rgb(241,241,241)).
+ * These declarations are UNLAYERED, and unlayered normal declarations outrank
+ * every layer regardless of specificity — so matching the component roots here
+ * beats the hashed class without naming any hash.
+ */
 
-:root {
-  /* surfaces (theme.css:195-199, dark column) */
-  --color-background-body: #1b1b1b;
-  --color-background-surface: #262626;
-  --color-background-card: #1b1b1b;
-  --color-background-popover: #1b1b1b;
-  --color-background-muted: #1b1b1b;
-  --color-background-gray: #303030;
+:root,
+[class*="astryx-"] {
+  /* surfaces */
+  --color-background-body: var(--pupil-background, #1b1b1b);
+  --color-background-card: var(--pupil-background, #1b1b1b);
+  --color-background-popover: var(--pupil-surface, #1b1b1b);
+  --color-background-surface: var(--pupil-surface, #262626);
+  --color-background-muted: var(--pupil-background, #1b1b1b);
+  --color-background-gray: var(--pupil-surface-raised, #303030);
 
-  /* accent (theme.css:200-201, 209, 212) */
-  --color-accent: #f1f1f1;
-  --color-accent-muted: #474747;
-  --color-text-accent: #f1f1f1;
-  --color-icon-accent: #f1f1f1;
-  --color-on-accent: #111111;
+  /* accent */
+  --color-accent: var(--pupil-accent, #f1f1f1);
+  --color-accent-muted: var(--pupil-surface-raised, #474747);
+  --color-text-accent: var(--pupil-accent, #f1f1f1);
+  --color-icon-accent: var(--pupil-accent, #f1f1f1);
+  --color-on-accent: var(--pupil-on-accent, #111111);
 
-  /* text + icons (theme.css:206-208, 228-230) */
-  --color-text-primary: #ffffff;
-  --color-text-secondary: #9e9e9e;
-  --color-text-disabled: #525252;
-  --color-icon-primary: #ffffff;
-  --color-icon-secondary: #9e9e9e;
-  --color-icon-disabled: #525252;
+  /* text + icons */
+  --color-text-primary: var(--pupil-text-primary, #ffffff);
+  --color-text-secondary: var(--pupil-text-secondary, #9e9e9e);
+  --color-text-disabled: var(--pupil-text-secondary, #525252);
+  /* Astryx Badge(neutral) は --color-text-gray を使う（テーマ色に合わせる） */
+  --color-text-gray: var(--pupil-text-primary, #d4d4d4);
+  --color-icon-primary: var(--pupil-text-primary, #ffffff);
+  --color-icon-secondary: var(--pupil-text-secondary, #9e9e9e);
+  --color-icon-disabled: var(--pupil-text-secondary, #525252);
 
-  /* lines, overlays, washes (theme.css:202-205, 237-241) */
+  /* lines, overlays, washes */
   --color-border: #ffffff1a;
-  --color-border-emphasized: #525252;
+  --color-border: color-mix(in srgb, var(--pupil-border, #ffffff) 12%, transparent);
+  --color-border-emphasized: var(--pupil-border, #525252);
   --color-neutral: #ffffff1a;
   --color-overlay: #000000cc;
   --color-overlay-hover: #ffffff0d;
   --color-overlay-pressed: #ffffff1a;
-  --color-skeleton: #525252;
+  --color-skeleton: var(--pupil-surface-raised, #525252);
   --color-shadow: #0000004d;
 
-  /* status (theme.css:216-236) */
-  --color-error: #ff705d;
+  /* status */
+  --color-error: var(--pupil-danger, #ff705d);
   --color-success: #64af4c;
   --color-info: #6d9cfe;
-  --color-text-error: #ffaea7;
+  --color-text-error: var(--pupil-danger, #ffaea7);
   --color-text-success: #90ca90;
   --color-text-info: #a1caff;
   --color-on-error: #111111;
   --color-on-success: #111111;
   --color-on-info: #111111;
 
-  /* radii (theme.css:282-288) */
+  /* radii */
   --radius-none: 0px;
   --radius-inner: 0.375rem;
   --radius-element: 0.625rem;
@@ -4457,7 +4486,7 @@ body {
   --radius-chat: 28px;
   --radius-full: 9999px;
 
-  /* container padding overrides (theme.css:538-540, 578-580) */
+  /* container padding overrides */
   --astryx-card-padding: var(--spacing-3);
   --astryx-section-padding: var(--spacing-3);
 }

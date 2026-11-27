@@ -17,6 +17,8 @@ struct ReaderOverlay: View {
     let isInReadLater: Bool
     let mode: ReaderMode
     let fit: ReaderFit
+    let spread: ReaderSpread
+    let direction: ReaderDirection
     let onClose: () -> Void
     /// 1 始まりのページ番号。
     let onSelectPage: (Int) -> Void
@@ -24,6 +26,8 @@ struct ReaderOverlay: View {
     let onToggleReadLater: () -> Void
     let onSelectMode: (ReaderMode) -> Void
     let onSelectFit: (ReaderFit) -> Void
+    let onSelectSpread: (ReaderSpread) -> Void
+    let onSelectDirection: (ReaderDirection) -> Void
 
     @State private var draggingPage: Double?
 
@@ -58,6 +62,9 @@ struct ReaderOverlay: View {
                 .lineLimit(1)
                 .truncationMode(.tail)
                 .frame(maxWidth: .infinity, alignment: .leading)
+
+            spreadMenu
+            directionMenu
 
             barButton(
                 systemImage: isFavorite ? "star.fill" : "star",
@@ -174,6 +181,50 @@ struct ReaderOverlay: View {
             .font(.system(size: 17, weight: .medium))
             .frame(width: 40, height: 40)
             .contentShape(Rectangle())
+    }
+
+    // MARK: - 見開き / 開き方向
+
+    /// 縦スクロールは 1 列なので、見開きと開き方向は効かない。
+    /// 触れないことが分かるように無効表示にする。
+    private var spreadMenusDisabled: Bool { mode == .vertical }
+
+    private var spreadMenu: some View {
+        Menu {
+            Picker("見開き", selection: Binding(
+                get: { spread },
+                set: { onSelectSpread($0) }
+            )) {
+                ForEach(ReaderSpread.allCases, id: \.self) { item in
+                    Text(item.label).tag(item)
+                }
+            }
+        } label: {
+            menuLabel(spread.symbolName)
+        }
+        .foregroundColor(spreadMenusDisabled ? theme.textSecondary : theme.textPrimary)
+        .disabled(spreadMenusDisabled)
+        .opacity(spreadMenusDisabled ? 0.35 : 1)
+        .accessibilityLabel("見開き")
+    }
+
+    private var directionMenu: some View {
+        Menu {
+            Picker("開き方向", selection: Binding(
+                get: { direction },
+                set: { onSelectDirection($0) }
+            )) {
+                ForEach(ReaderDirection.allCases, id: \.self) { item in
+                    Text(item.label).tag(item)
+                }
+            }
+        } label: {
+            menuLabel(direction.symbolName)
+        }
+        .foregroundColor(spreadMenusDisabled ? theme.textSecondary : theme.textPrimary)
+        .disabled(spreadMenusDisabled)
+        .opacity(spreadMenusDisabled ? 0.35 : 1)
+        .accessibilityLabel("開き方向")
     }
 
     private var pageBinding: Binding<Double> {

@@ -71,12 +71,16 @@ struct ReaderView: View {
                     isInReadLater: library.isInReadLater(galleryID),
                     mode: settings.readerModeValue,
                     fit: settings.readerFitValue,
+                    spread: settings.readerSpreadValue,
+                    direction: settings.readerDirectionValue,
                     onClose: { close() },
                     onSelectPage: { page in show(page: page) },
                     onToggleFavorite: { library.toggleFavorite(galleryID) },
                     onToggleReadLater: { library.toggleReadLater(galleryID) },
                     onSelectMode: { mode in settings.readerMode = mode.rawValue },
-                    onSelectFit: { fit in settings.readerFit = fit.rawValue }
+                    onSelectFit: { fit in settings.readerFit = fit.rawValue },
+                    onSelectSpread: { spread in settings.readerSpread = spread.rawValue },
+                    onSelectDirection: { direction in settings.readerDirection = direction.rawValue }
                 )
                 .transition(.opacity)
             }
@@ -181,31 +185,159 @@ struct ReaderView: View {
         }
     }
 
-    // MARK: - ページ送り
+    // MARK: - ページ送り（単独 / 見開き）
+
+    /// ページ index と表示スロットの対応。安いので持たずに毎回作る。
+    private var spreadLayout: ReaderSpreadLayout {
+        ReaderSpreadLayout(
+            pageCount: pageURLs.count,
+            spread: settings.readerSpreadValue,
+            coverSingle: settings.readerCoverSingle,
+            direction: settings.readerDirectionValue
+        )
+    }
+
+    /// `TabView` の selection は **表示スロット**。ページ index との入れ替えは
+    /// `ReaderSpreadLayout` に閉じ込めてある（右開きはここで反転する）。
+    private var pageSelection: Binding<Int> {
+        Binding(
+            get: { spreadLayout.visualSlot(forReadingSlot: spreadLayout.slotForPage(currentIndex)) },
+            set: { visual in
+                let page = spreadLayout.pageForSlot(spreadLayout.readingSlot(forVisualSlot: visual))
+                if page != currentIndex {
+                    currentIndex = page
+                }
+            }
+        )
+    }
 
     private var pagedPages: some View {
-        TabView(selection: $currentIndex) {
-            ForEach(pageURLs.indices, id: \.self) { index in
-                ZStack {
-                    theme.background
-
-                    if let url = pageURLs[index] {
-                        ZoomablePageView(url: url, fit: settings.readerFitValue) {
-                            toggleChrome()
-                        }
-                    } else {
-                        Text("このページは読み込めませんでした")
-                            .font(theme.font(.caption))
-                            .foregroundColor(theme.textSecondary)
-                            .multilineTextAlignment(.center)
-                            .padding(theme.space(.lg))
-                    }
-                }
-                .tag(index)
+        TabView(selection: pageSelection) {
+            ForEach(0..<spreadLayout.slotCount, id: \.self) { visual in
+                slotView(visual: visual)
+                    .tag(visual)
             }
         }
         .tabViewStyle(.page(indexDisplayMode: .never))
         .ignoresSafeArea()
+    }
+
+    @ViewBuilder
+    private func slotView(visual: Int) -> some View {
+        let layout = spreadLayout
+        let pages = layout.visualPages(forReadingSlot: layout.readingSlot(forVisualSlot: visual))
+
+        // 見開き設定なら、1 ページしか無いスロット（表紙・最終ページが奇数）も
+        // 見開きの寸法で出す。空き側は背景だけになるので、ページの大きさが
+        // スロットごとに変わらない。
+        if settings.readerSpreadValue == .double, pageURLs.count > 1 {
+            doubleSlot(pages: pages)
+        } else {
+            singleSlot(page: pages.first ?? 0)
+        }
+    }
+
+    @ViewBuilder
+    private func singleSlot(page: Int) -> some View {
+        ZStack {
+            theme.background
+
+            if pageURLs.indices.contains(page), let url = pageURLs[page] {
+                ZoomablePageView(url: url, fit: settings.readerFitValue) {
+                    toggleChrome()
+                }
+            } else {
+                missingPageLabel
+            }
+        }
+    }
+
+    /// 見開き。左右に 1 枚ずつ、`fitScreen` 相当で高さを合わせる。
+    ///
+    /// ここではズームを持たない軽量ビューを使う。`ZoomablePageView` を 2 枚並べると
+    /// pan/zoom が互いのジェスチャを奪い合うため。ダブルタップは
+    /// 「見開き ⇄ 単独」に割り当ててある。
+    private func doubleSlot(pages: [Int]) -> some View {
+        GeometryReader { proxy in
+            let box = CGSize(
+                width: max(proxy.size.width / 2, 1),
+                height: max(proxy.size.height, 1)
+            )
+
+            // 1 ページしか無いスロットは、空きを読み終わり側に置く。
+            // 右開きなら左が空き（表紙は右）、左開きなら右が空き。
+            let halves = spreadHalves(pages: pages, rtl: settings.readerDirectionValue == .rtl)
+
+            HStack(spacing: 0) {
+                ForEach(halves.indices, id: \.self) { index in
+                    if let page = halves[index] {
+                        spreadHalf(page: page, box: box)
+                    } else {
+                        theme.background
+                            .frame(width: box.width, height: box.height)
+                    }
+                }
+            }
+            .frame(width: proxy.size.width, height: proxy.size.height)
+        }
+    }
+
+    /// 見開きの左右 2 枠。`nil` は空きスロット（背景だけ敷く）。
+    private func spreadHalves(pages: [Int], rtl: Bool) -> [Int?] {
+        if pages.count > 1 {
+            return pages.map { Optional($0) }
+        }
+
+        let only = pages.first ?? 0
+        return rtl ? [nil, only] : [only, nil]
+    }
+
+    @ViewBuilder
+    private func spreadHalf(page: Int, box: CGSize) -> some View {
+        ZStack {
+            theme.background
+
+            if pageURLs.indices.contains(page), let url = pageURLs[page] {
+                VerticalPageView(
+                    url: url,
+                    size: spreadPageSize(page: page, box: box),
+                    onTap: { toggleChrome() },
+                    onDoubleTap: { toggleSpread(selecting: page) }
+                )
+            } else {
+                missingPageLabel
+            }
+        }
+        .frame(width: box.width, height: box.height)
+    }
+
+    private func spreadPageSize(page: Int, box: CGSize) -> CGSize {
+        let files = gallery?.info.fileList ?? []
+
+        guard files.indices.contains(page) else { return box }
+
+        let file = files[page]
+        let image = CGSize(width: CGFloat(max(file.width, 1)), height: CGFloat(max(file.height, 1)))
+        return ReaderFit.fitScreen.pageSize(for: image, in: box)
+    }
+
+    private var missingPageLabel: some View {
+        Text("このページは読み込めませんでした")
+            .font(theme.font(.caption))
+            .foregroundColor(theme.textSecondary)
+            .multilineTextAlignment(.center)
+            .padding(theme.space(.lg))
+    }
+
+    /// 見開きのページをダブルタップしたら、そのページを保ったまま単独表示へ。
+    private func toggleSpread(selecting page: Int) {
+        if pageURLs.indices.contains(page), page != currentIndex {
+            currentIndex = page
+        }
+
+        settings.readerSpread = (settings.readerSpreadValue == .double)
+            ? ReaderSpread.single.rawValue
+            : ReaderSpread.double.rawValue
     }
 
     // MARK: - 縦スクロール
@@ -267,11 +399,7 @@ struct ReaderView: View {
             ZStack {
                 theme.background
 
-                Text("このページは読み込めませんでした")
-                    .font(theme.font(.caption))
-                    .foregroundColor(theme.textSecondary)
-                    .multilineTextAlignment(.center)
-                    .padding(theme.space(.lg))
+                missingPageLabel
             }
             .frame(width: max(size.width, 1), height: max(size.height, 1))
         }

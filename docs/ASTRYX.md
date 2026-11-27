@@ -361,6 +361,87 @@ Root の最背面に壁紙を敷いても、**各画面が不透明な `theme.ba
 6. **各画面の地色は `theme.screenBackground` を使うこと**。`theme.background` で塗ると壁紙が完全に隠れる（v1.0.4 で実機報告のあった不具合）。`Sources/UI/**` 側の置換は ui-browse / ui-reader が担当。
 7. 壁紙ファイルが「存在するが壊れている」場合、`screenBackground` は `Color.clear`（ファイル存在で判定）を返し、`WallpaperView` 側はグラデーションを描く。黒画面にはならないが、厳密には背景色と壁紙の状態が一致しない。
 
+### 7.8 Astryx Web 面（設定パネル / About）のテーマ追従
+
+v1.0.5 まで、WKWebView の 2 面は Astryx neutral のままだった（テーマをピンクにしても Web 部分だけ白黒）。
+現在は Swift が `pupilUpdate` の payload に 9 個の hex を足すだけで、Web 面が同じ配色に追従する。
+**React の再マウントは不要**（CSS カスタムプロパティを差し替えるだけ）。
+
+#### キー（凍結）
+
+| payload キー | 書き込まれる CSS 変数 | ブリッジ先（Astryx トークン） |
+|---|---|---|
+| `themeAccent` | `--pupil-accent` | `--color-accent` / `--color-text-accent` / `--color-icon-accent` |
+| `themeOnAccent` | `--pupil-on-accent` | `--color-on-accent` |
+| `themeBackground` | `--pupil-background` | `--color-background-body` / `-card` / `-muted` / `-popover` |
+| `themeSurface` | `--pupil-surface` | `--color-background-surface` |
+| `themeSurfaceRaised` | `--pupil-surface-raised` | `--color-background-gray` / `--color-skeleton` / `--color-accent-muted` |
+| `themeTextPrimary` | `--pupil-text-primary` | `--color-text-primary` / `--color-icon-primary` / `--color-text-gray` |
+| `themeTextSecondary` | `--pupil-text-secondary` | `--color-text-secondary` / `--color-icon-secondary` / `--color-text-disabled` |
+| `themeBorder` | `--pupil-border` | `--color-border`（12% 合成）/ `--color-border-emphasized` |
+| `themeDanger` | `--pupil-danger` | `--color-error` / `--color-text-error` |
+
+すべて `#RRGGBB`（`#RGB` も可）。挙動:
+
+- **未指定キー** → 何もしない（`:root` の既定 = theme-neutral dark がそのまま効く）
+- **空文字** → その変数を `removeProperty`（neutral に戻す）
+- **不正な hex**（`hotpink` 等） → 無視
+
+#### 実装（`design/src/main.jsx` / `design/src/pupil.css`）
+
+```js
+function applyThemeVars(settings) {
+  const root = document.documentElement;
+  Object.keys(THEME_VAR_MAP).forEach((key) => {
+    if (!Object.prototype.hasOwnProperty.call(settings, key)) return; // 未指定 = 既定
+    if (settings[key] === '') { root.style.removeProperty(THEME_VAR_MAP[key]); return; }
+    const hex = normalizeHex(settings[key]);
+    if (hex) root.style.setProperty(THEME_VAR_MAP[key], hex);         // 不正 hex は無視
+  });
+}
+```
+
+```css
+:root,
+[class*="astryx-"] {
+  --color-accent: var(--pupil-accent, #f1f1f1);
+  --color-background-body: var(--pupil-background, #1b1b1b);
+  /* …残りも同様（既定値は theme-neutral の dark 列） */
+}
+```
+
+**なぜ `[class*="astryx-"]` も指定するのか（実測で踏んだ罠）**: StyleX はトークン定義を
+`:root, .xHASH{--color-accent: light-dark(#1b1b1b, #f1f1f1); …}` の形で `@layer astryx-base` に出し、
+各コンポーネントの要素自身がその hashed class を持つ。`:root` だけを上書きすると `<html>` の値は変わるが、
+要素自身の宣言が勝って**ボタンは白のまま**だった（実測: `primaryBtnBg: rgb(241,241,241)`）。
+`pupil.css` の宣言は**レイヤ外**で、レイヤ外の通常宣言は層内の宣言より優先されるため、
+コンポーネント要素にも同じ宣言を当てれば hashed class（`:not(#\#)` で ID 相当まで上がっている）に勝てる。
+
+#### 実測した computed style（2026-11-27、Chrome / ローカル HTTP）
+
+`window.pupilUpdate(JSON.stringify({themeAccent:"#FF5C9A", themeOnAccent:"#111111", themeBackground:"#141013", themeSurface:"#1F181C", themeSurfaceRaised:"#2C262A", themeTextPrimary:"#FFFFFF", themeTextSecondary:"#9C9B9C", themeBorder:"#FF5C9A", themeDanger:"#FF705D"}))`
+
+| 対象 | neutral（既定） | pink 適用後 | tiffany 適用後 |
+|---|---|---|---|
+| `getComputedStyle(document.body).backgroundColor` | `rgb(27, 27, 27)` | `rgb(20, 16, 19)` | `rgb(14, 20, 20)` |
+| primary Button の `backgroundColor` | `rgb(241, 241, 241)` | `rgb(255, 92, 154)` | `rgb(10, 186, 181)` |
+| primary Button の `color` | `rgb(17, 17, 17)` | `rgb(17, 17, 17)` | `rgb(17, 17, 17)` |
+| Card の `backgroundColor` | `rgb(27, 27, 27)` | `rgb(20, 16, 19)` | `rgb(14, 20, 20)` |
+| Card の `borderTopColor` | `color(srgb 1 1 1 / 0.12)` | `color(srgb 1 0.360784 0.603922 / 0.12)` | `color(srgb 1 1 1 / 0.12)` |
+| Badge(neutral) の `backgroundColor` | `rgb(48, 48, 48)` | `rgb(44, 38, 42)` | `rgb(36, 45, 44)` |
+| Badge の `color` | `rgb(212, 212, 212)` | `rgb(255, 255, 255)` | `rgb(255, 255, 255)` |
+| 補助テキストの `color` | `rgb(158, 158, 158)` | `rgb(156, 155, 156)` | `rgb(154, 156, 156)` |
+
+- 不正 hex（`themeAccent:"hotpink"`）は無視され、accent は直前の `rgb(10, 186, 181)` のまま／背景だけ更新された
+- 空文字で全キー解除 → すべて neutral の値に戻る
+- `Button` は `transition-property: background-color` を持つため、**`pupilUpdate` 直後の `getComputedStyle` は遷移中の値を返す**。検証時は 300–500ms 待つこと（待たずに測って一度バグと誤認した）
+
+#### iOS 16.0–16.3 での注意
+
+- `--color-border` は `color-mix()` で alpha 12% を合成する。`color-mix` は Safari 16.2+ なので、
+  直前の行に `--color-border: #ffffff1a;` を置いて**非対応環境では theme-neutral の白 10% にフォールバック**させている（テーマ色が境界線に乗らないだけで、崩れない）。
+- `@scope` / `light-dark()` 非対応環境でも、`pupil.css` の `:root` が同じ値を直接持つので色は出る（§5-3 と同じシム）。
+
 ## 8. ライセンス
 
 | 対象 | ライセンス |

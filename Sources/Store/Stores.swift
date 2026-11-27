@@ -23,6 +23,11 @@ final class Settings: ObservableObject {
     /// `Settings.readerModeValue` / `readerFitValue` が行う。
     @Published var readerMode: String = "paged" { didSet { persist() } }
     @Published var readerFit: String = "fitScreen" { didSet { persist() } }
+    /// 見開き（"single" / "double"）、開き方向（"ltr" / "rtl"）、
+    /// 見開き時に 1 ページ目を単独で出すか。解釈は `ReaderLayout.swift` 側。
+    @Published var readerSpread: String = "single" { didSet { persist() } }
+    @Published var readerDirection: String = "rtl" { didSet { persist() } }
+    @Published var readerCoverSingle: Bool = true { didSet { persist() } }
 
     private init() {
         // Read before the observers exist: assigning in init would otherwise
@@ -35,6 +40,9 @@ final class Settings: ObservableObject {
         browseSort = defaults.string(forKey: "browseSort") ?? SortMode.popularWeek.rawValue
         readerMode = defaults.string(forKey: "readerMode") ?? "paged"
         readerFit = defaults.string(forKey: "readerFit") ?? "fitScreen"
+        readerSpread = defaults.string(forKey: "readerSpread") ?? "single"
+        readerDirection = defaults.string(forKey: "readerDirection") ?? "rtl"
+        readerCoverSingle = defaults.object(forKey: "readerCoverSingle") as? Bool ?? true
     }
 
     private func persist() {
@@ -46,6 +54,9 @@ final class Settings: ObservableObject {
         defaults.set(browseSort, forKey: "browseSort")
         defaults.set(readerMode, forKey: "readerMode")
         defaults.set(readerFit, forKey: "readerFit")
+        defaults.set(readerSpread, forKey: "readerSpread")
+        defaults.set(readerDirection, forKey: "readerDirection")
+        defaults.set(readerCoverSingle, forKey: "readerCoverSingle")
     }
 
     var colorScheme: ColorScheme? {

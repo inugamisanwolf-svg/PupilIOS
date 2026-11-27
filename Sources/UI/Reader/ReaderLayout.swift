@@ -122,4 +122,160 @@ extension Settings {
     var readerFitValue: ReaderFit {
         ReaderFit(rawValue: readerFit) ?? .fitScreen
     }
+
+    var readerSpreadValue: ReaderSpread {
+        ReaderSpread(rawValue: readerSpread) ?? .single
+    }
+
+    var readerDirectionValue: ReaderDirection {
+        ReaderDirection(rawValue: readerDirection) ?? .rtl
+    }
+}
+
+// MARK: - 見開き / 開き方向
+
+/// 1 画面に 1 ページ出すか、2 ページ並べるか。
+enum ReaderSpread: String, CaseIterable, Codable, Hashable {
+    case single
+    case double
+
+    var label: String {
+        switch self {
+        case .single: return "単独表示"
+        case .double: return "見開き表示"
+        }
+    }
+
+    var symbolName: String {
+        switch self {
+        case .single: return "rectangle"
+        case .double: return "rectangle.split.2x1"
+        }
+    }
+}
+
+/// ページを送る向き。`rtl` が漫画の右開き。
+enum ReaderDirection: String, CaseIterable, Codable, Hashable {
+    case ltr
+    case rtl
+
+    var label: String {
+        switch self {
+        case .ltr: return "左開き（左から右）"
+        case .rtl: return "右開き（右から左）"
+        }
+    }
+
+    var symbolName: String {
+        switch self {
+        case .ltr: return "chevron.forward.2"
+        case .rtl: return "chevron.backward.2"
+        }
+    }
+}
+
+/// ページ index と「表示スロット」の対応を 1 箇所に閉じ込める。
+///
+/// スロットは `TabView` の 1 ページ分で、1〜2 ページを持つ。
+/// - **読み順スロット**: 0,1,2… とページの進む順。
+/// - **表示スロット**: `TabView` が並べる順。`rtl` では読み順を反転させる
+///   （右開きなので、次のページは右方向のスワイプで出てくる）。
+///
+/// `Library.setPage` に渡すのは常に **ページ index（0 始まり）**。スロット番号は
+/// 保存しないので、見開きの設定を変えても読了位置は動かない。
+struct ReaderSpreadLayout {
+    let pageCount: Int
+    let spread: ReaderSpread
+    let coverSingle: Bool
+    let direction: ReaderDirection
+
+    /// 配列は組まない。`TabView(selection:)` の Binding から毎回参照されるので、
+    /// ここは O(1) の算術だけにしてある（2000 ページの作品で
+    /// スワイプのたびに `[[Int]]` を作ると重い）。
+    init(pageCount: Int, spread: ReaderSpread, coverSingle: Bool, direction: ReaderDirection) {
+        self.pageCount = max(pageCount, 0)
+        self.spread = spread
+        self.coverSingle = coverSingle
+        self.direction = direction
+    }
+
+    /// 見開きが実際に効いているか（1 ページの作品は常に単独）。
+    var isDouble: Bool { spread == .double && pageCount > 1 }
+
+    var slotCount: Int {
+        guard pageCount > 0 else { return 0 }
+        guard isDouble else { return pageCount }
+
+        // 表紙単独: [0], (1,2), (3,4)… / 表紙も対: (0,1), (2,3)…
+        return coverSingle ? 1 + pageCount / 2 : (pageCount + 1) / 2
+    }
+
+    /// 読み順スロットの先頭ページ。読了位置として保存する値。
+    func pageForSlot(_ slot: Int) -> Int {
+        guard pageCount > 0, slotCount > 0 else { return 0 }
+
+        let s = min(max(slot, 0), slotCount - 1)
+        guard isDouble else { return s }
+
+        if coverSingle {
+            return s == 0 ? 0 : 2 * s - 1
+        }
+        return 2 * s
+    }
+
+    /// ページを含む読み順スロット。
+    func slotForPage(_ page: Int) -> Int {
+        guard pageCount > 0, slotCount > 0 else { return 0 }
+
+        let p = min(max(page, 0), pageCount - 1)
+        guard isDouble else { return p }
+
+        if coverSingle {
+            return p == 0 ? 0 : (p + 1) / 2
+        }
+        return p / 2
+    }
+
+    /// 読み順スロットに入っているページ（1〜2 個）。
+    func pages(forReadingSlot slot: Int) -> [Int] {
+        guard pageCount > 0, slot >= 0, slot < slotCount else { return [] }
+
+        let first = pageForSlot(slot)
+        guard isDouble else { return [first] }
+
+        // 表紙だけ単独のスロット。
+        if coverSingle, slot == 0 { return [0] }
+
+        if first + 1 < pageCount { return [first, first + 1] }
+        return [first]
+    }
+
+    /// 全スロット（デバッグ・検証用。ホットパスからは呼ばない）。
+    var slots: [[Int]] {
+        (0..<slotCount).map { pages(forReadingSlot: $0) }
+    }
+
+    /// 表示スロット（`TabView` の並び）→ 読み順スロット。
+    func readingSlot(forVisualSlot visual: Int) -> Int {
+        guard slotCount > 0 else { return 0 }
+
+        let clamped = min(max(visual, 0), slotCount - 1)
+        return direction == .rtl ? slotCount - 1 - clamped : clamped
+    }
+
+    /// 読み順スロット → 表示スロット。
+    func visualSlot(forReadingSlot slot: Int) -> Int {
+        guard slotCount > 0 else { return 0 }
+
+        let clamped = min(max(slot, 0), slotCount - 1)
+        return direction == .rtl ? slotCount - 1 - clamped : clamped
+    }
+
+    /// 見開きの中の並び（左→右）。`rtl` では右が先のページになる。
+    func visualPages(forReadingSlot slot: Int) -> [Int] {
+        let pages = pages(forReadingSlot: slot)
+
+        guard direction == .rtl, pages.count > 1 else { return pages }
+        return Array(pages.reversed())
+    }
 }
