@@ -10,11 +10,15 @@ import UIKit
 ///
 /// The reader is a paging `TabView`, which is a scroll view too, so two pan
 /// recognisers meet on the same touch. At 1x this page has nothing to pan, and
-/// if its pan began the page turn would stop working: `PanGate` refuses the pan
-/// while the page is at its minimum zoom and lets the drag travel up to the
+/// if its pan began the page turn would stop working: the page disables its own
+/// pan while it is at its minimum zoom, which lets the drag travel up to the
 /// pager. Zoomed in, the pan is allowed and the page moves under the finger
 /// instead of turning. The pinch recogniser is deliberately left alone, so
 /// zooming never depends on that decision.
+///
+/// The pan's *delegate* cannot be reassigned to make this decision: UIKit throws
+/// ("UIScrollView's built-in pan gesture recognizer must have its scroll view as
+/// its delegate") the moment `init` runs. `isEnabled` is the handle that works.
 struct ZoomablePageView: UIViewRepresentable {
     let url: URL
     let onTap: () -> Void
@@ -107,10 +111,16 @@ final class ZoomScrollView: UIScrollView, UIScrollViewDelegate {
     private let imageView = UIImageView()
     private let spinner = UIActivityIndicatorView(style: .large)
     private let messageLabel = UILabel()
-    private let panGate = PanGate()
 
     private let doubleTapZoom: CGFloat = 2.5
     private let maximumZoom: CGFloat = 4
+
+    /// True while the user is pinching or while a zoomed page is settling.
+    private var isZooming = false
+
+    /// True when the page is showing at its fitted size, so nothing is off screen
+    /// to pan to.
+    private var isAtFitScale: Bool { zoomScale <= minimumZoomScale + 0.001 }
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -138,9 +148,6 @@ final class ZoomScrollView: UIScrollView, UIScrollViewDelegate {
         isMultipleTouchEnabled = true
         delegate = self
 
-        panGate.scrollView = self
-        panGestureRecognizer.delegate = panGate
-
         imageView.contentMode = .scaleAspectFit
         imageView.clipsToBounds = true
         imageView.isUserInteractionEnabled = false
@@ -165,6 +172,25 @@ final class ZoomScrollView: UIScrollView, UIScrollViewDelegate {
         singleTap.numberOfTapsRequired = 1
         singleTap.require(toFail: doubleTap)
         addGestureRecognizer(singleTap)
+
+        updatePanAvailability()
+    }
+
+    /// Lets the page's own pan start only where there is something to pan to.
+    ///
+    /// At fit scale the page has nothing off screen, and a scroll view that keeps
+    /// its pan would swallow the horizontal drag the reader turns pages with.
+    /// Toggling `isEnabled` is the only handle UIKit leaves here: handing the pan
+    /// a different delegate throws ("UIScrollView's built-in pan gesture
+    /// recognizer must have its scroll view as its delegate"), and overriding
+    /// `gestureRecognizerShouldBegin` is not reachable because the scroll view's
+    /// conformance to `UIGestureRecognizerDelegate` is private.
+    private func updatePanAvailability() {
+        let shouldPan = isZooming || !isAtFitScale
+
+        if panGestureRecognizer.isEnabled != shouldPan {
+            panGestureRecognizer.isEnabled = shouldPan
+        }
     }
 
     // MARK: - State
@@ -177,6 +203,7 @@ final class ZoomScrollView: UIScrollView, UIScrollViewDelegate {
         contentInset = .zero
         contentSize = .zero
         spinner.startAnimating()
+        updatePanAvailability()
         setNeedsLayout()
     }
 
@@ -193,6 +220,7 @@ final class ZoomScrollView: UIScrollView, UIScrollViewDelegate {
         messageLabel.isHidden = true
         imageView.image = image
         setZoomScale(minimumZoomScale, animated: false)
+        updatePanAvailability()
         setNeedsLayout()
         layoutIfNeeded()
     }
@@ -203,6 +231,7 @@ final class ZoomScrollView: UIScrollView, UIScrollViewDelegate {
         messageLabel.isHidden = true
         imageView.image = image
         setZoomScale(minimumZoomScale, animated: false)
+        updatePanAvailability()
         setNeedsLayout()
         layoutIfNeeded()
     }
@@ -212,6 +241,7 @@ final class ZoomScrollView: UIScrollView, UIScrollViewDelegate {
         messageLabel.isHidden = true
         spinner.stopAnimating()
         setZoomScale(minimumZoomScale, animated: false)
+        updatePanAvailability()
     }
 
     // MARK: - Layout
@@ -259,6 +289,8 @@ final class ZoomScrollView: UIScrollView, UIScrollViewDelegate {
         if contentInset != insets {
             contentInset = insets
         }
+
+        updatePanAvailability()
     }
 
     private func fittedSize(for imageSize: CGSize, in box: CGSize) -> CGSize {
@@ -286,6 +318,18 @@ final class ZoomScrollView: UIScrollView, UIScrollViewDelegate {
         if contentInset.left != left || contentInset.top != top {
             contentInset = UIEdgeInsets(top: top, left: left, bottom: 0, right: 0)
         }
+
+        updatePanAvailability()
+    }
+
+    func scrollViewWillBeginZooming(_ scrollView: UIScrollView, with view: UIView?) {
+        isZooming = true
+        updatePanAvailability()
+    }
+
+    func scrollViewDidEndZooming(_ scrollView: UIScrollView, with view: UIView?, atScale scale: CGFloat) {
+        isZooming = false
+        updatePanAvailability()
     }
 
     // MARK: - Gestures
@@ -312,25 +356,5 @@ final class ZoomScrollView: UIScrollView, UIScrollViewDelegate {
         )
 
         zoom(to: rect, animated: true)
-    }
-}
-
-/// Decides whether the page's own pan may start.
-///
-/// A separate object rather than the scroll view itself: the scroll view already
-/// carries `UIScrollViewDelegate` duties here, and keeping the gate apart leaves
-/// nothing to reinterpret on the view's own gesture handling.
-final class PanGate: NSObject, UIGestureRecognizerDelegate {
-    weak var scrollView: UIScrollView?
-
-    func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
-        guard let scrollView = scrollView else { return true }
-
-        if gestureRecognizer === scrollView.panGestureRecognizer,
-           scrollView.zoomScale <= scrollView.minimumZoomScale + 0.001 {
-            return false
-        }
-
-        return true
     }
 }

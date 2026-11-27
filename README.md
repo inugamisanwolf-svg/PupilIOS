@@ -173,6 +173,20 @@ AltStore / SideStore を使うと、同じ Wi-Fi 内で 7 日ごとの自動再�
 - 署名が切れると起動時に「開発元を信頼できません」系のダイアログで落ちます。再署名して
   入れ直してください（アプリ内データは引き継がれません）。
 
+## 変更履歴
+
+### 1.0.1
+- **修正（クラッシュ）**: リーダーで漫画を開いた瞬間に落ちる問題。`ZoomScrollView` が
+  `UIScrollView` の built-in pan ジェスチャの `delegate` を差し替えていたため、UIKit の
+  「pan の delegate は scroll view 自身でなければならない」というハード例外に当たっていました。
+  delegate 差し替えを撤去し、`panGestureRecognizer.isEnabled` をズーム状態で切り替える方式
+  （等倍時は pan 無効 → 横ドラッグが `TabView` に渡りページ送りが効く）に変更。
+- `CURRENT_PROJECT_VERSION` を 2 に更新。
+
+### 1.0.0
+- 初回ビルド。ブラウズ / 検索 / 詳細 / リーダー / お気に入り / 履歴 / 設定、Astryx デザインシステム、
+  日本語 UI、タグ翻訳 4 言語。
+
 ## 検証状況
 
 | 項目 | 状態 |
@@ -199,8 +213,10 @@ AltStore / SideStore を使うと、同じ Wi-Fi 内で 7 日ごとの自動再�
 - タグ翻訳は同梱の 4 言語（es / id / ko / zh）のみ。新しい言語は `Resources/tags/` に
   JSON を足せば `TagTranslations.availableLanguages` に現れます。
 - リーダーのズームは `UIScrollView` ベース。ダブルタップズームの倍率は固定（2.5x）。
-- **リーダーでピンチ操作とページ送りを同時に行う操作は実機未検証**（`TabView(.page)` と
-  `UIScrollView` のジェスチャ競合は、端末と指の速度によって挙動が変わりうる）。
+- **リーダーでピンチ操作とページ送りを同時に行う操作は実機で確認中**（`TabView(.page)` と
+  `UIScrollView` のジェスチャ競合）。**v1.0.1 でクラッシュ（`panGestureRecognizer.delegate` の
+  差し替えによるハード例外）を修正**し、等倍時は pan を無効化して横ドラッグをページ送りに
+  渡す方式へ変更。挙動そのものは引き続き実機で確認中。
 - **iOS 16.0–16.3 の WKWebView では Astryx 面にトークンシムが必要**（新しめの CSS
   custom property 解決の差異を吸収する層を噛ませて表示）。16.4 以降は素のままで表示される。
 - **ダウンロード（オフライン保存）機能は未移植**。移植元 Pupil の DL 機能は本移植の
