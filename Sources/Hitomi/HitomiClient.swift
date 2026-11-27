@@ -12,6 +12,15 @@ import Foundation
  retry, same range arithmetic -- so a divergence between the two is a bug here
  rather than a difference in intent. `_probe/verify.py` re-derives every URL
  this file builds and asks the live hosts for them.
+
+ ## Routing is one await, not one per image
+
+ `ensureGg()` (a `gg.js` fetch, cached for 60 s) used to be the only await in
+ URL construction, but it sat in the middle of the per-image path, so a gallery
+ with 2000 pages cost 2000 actor hops and held 2000 URLs. The routing maths is
+ now a synchronous core (`syncHashPath` / `syncURLString` / `syncImageURL`) that
+ assumes `gg` is loaded, and the public API wraps it with a single `ensureGg()`.
+ Batches (`pageURLs`) therefore cost one hop in total.
  */
 actor HitomiClient {
     static let shared = HitomiClient()
@@ -26,11 +35,33 @@ actor HitomiClient {
     var indexVersions: [String: (value: String, at: Date)] = [:]
     var suggestionCache: [String: [Suggestion]] = [:]
 
+    /// The whole-index listings, memoised by the nozomi file they came from.
+    ///
+    /// One entry is ~1.25M ids -- ~10 MB as `[Int]` (measured: the
+    /// `index-all.nozomi` file is 4,990,152 bytes). A query built out of NOT or
+    /// OR asks for it more than once, and ranking asks again, so it is held for
+    /// the same ten minutes the index version is; two entries at most, oldest
+    /// evicted, because a cache that grows per language is its own jetsam.
+    var indexListingCache: [String: (ids: [Int], at: Date)] = [:]
+
+    /// One read in flight per listing, shared by every caller waiting on it.
+    /// Two concurrent downloads of the same 10 MB file is the case that gets
+    /// the app killed, and a tag search that negates something does exactly
+    /// that on every keystroke.
+    var indexListingInFlight: [String: Task<[Int], Error>] = [:]
+
     /// Kotlin: `INDEX_VERSION_TTL_MS = 10 * 60 * 1000`.
     static let indexVersionTTL: TimeInterval = 600
 
+    /// How many `all` listings are kept (see `indexListingCache`).
+    static let indexListingCacheLimit = 2
+
     /// How many gallery info requests a grid may have in flight at once.
     static let parallelBlockLimit = 6
+
+    /// How many page thumbnails a detail screen resolves up front. The strip
+    /// shows 30; the rest of the pages are resolved on demand by the reader.
+    static let thumbnailLimit = 60
 
     private init() {
         let cached = URLSessionConfiguration.default
@@ -126,9 +157,16 @@ actor HitomiClient {
         try gg.load(js)
     }
 
-    private func subdomain(of url: URL, base: String?, dir: String?) async throws -> String {
-        try await ensureGg()
+    // MARK: - Routing, synchronous core
+    //
+    // Everything below this line assumes `gg` has been loaded and touches no
+    // suspension point. Kotlin does the same work with `suspend` on every call
+    // because its `Gg.m` refreshes on demand; here the refresh is the caller's
+    // single `ensureGg()`.
 
+    /// Kotlin `subdomainFromURL`: two hex digits then one, read back as one
+    /// number, and `m(g)` picking the host.
+    private func syncSubdomain(of string: String, base: String?, dir: String?) -> String {
         var retval = ""
         let hasBase = !(base ?? "").isEmpty
 
@@ -137,9 +175,7 @@ actor HitomiClient {
             else if dir == "avif" { retval = "a" }
         }
 
-        // Two hex digits then one, read back as one number -- the Kotlin
-        // `(..)(.)` groups, in the same order.
-        let caps = RE.captures("/[0-9a-f]{61}([0-9a-f]{2})([0-9a-f])", in: url.absoluteString)
+        let caps = RE.captures("/[0-9a-f]{61}([0-9a-f]{2})([0-9a-f])", in: string)
         guard caps.count >= 2, let g = Int(caps[1] + caps[0], radix: 16) else { return "" }
 
         if !hasBase {
@@ -151,50 +187,96 @@ actor HitomiClient {
         return retval
     }
 
-    func urlFromUrl(_ url: URL, base: String? = nil, dir: String? = nil) async throws -> URL {
-        let sub = try await subdomain(of: url, base: base, dir: dir)
-        let replaced = url.absoluteString.replacingOccurrences(
+    /// The `//..?.host/` prefix rewritten to the one host that carries this
+    /// image. Kotlin: `urlFromUrl`.
+    private func syncURLString(_ string: String, base: String?, dir: String?) -> String {
+        let sub = syncSubdomain(of: string, base: base, dir: dir)
+        return string.replacingOccurrences(
             of: "//..?\\.(?:gold-usergeneratedcontent\\.net|hitomi\\.la)/",
             with: "//\(sub).\(HitomiEndpoint.imageHost)/",
             options: .regularExpression
         )
-        return try hitomiURL(replaced)
     }
 
-    func urlFromHash(_ galleryID: Int, image: GalleryFiles, dir: String? = nil, ext: String? = nil) async throws -> URL {
-        try await ensureGg()
-
+    /// `https://a.<host>/[dir/]<b><s>/<hash>.<ext>`. Kotlin: `urlFromHash`.
+    private func syncHashPath(_ image: GalleryFiles, dir: String?, ext: String?) -> String {
         let resolvedExt = ext ?? dir ?? Self.fileExtension(of: image.name)
-
         var path = "https://a.\(HitomiEndpoint.imageHost)/"
         if let dir = dir, !dir.isEmpty, dir != "webp", dir != "avif" {
             path += dir + "/"
         }
         path += gg.fullPath(image.hash) + "." + resolvedExt
-        return try hitomiURL(path)
+        return path
+    }
+
+    /// Kotlin: `urlFromUrlFromHash`. A `tn` thumbnail is laid out by
+    /// `realFullPath` (`xx/x/<hash>`) on the letter-prefixed hosts instead, and
+    /// the subdomain is resolved without the `dir` hint, exactly as Kotlin
+    /// passes it.
+    private func syncImageURL(_ image: GalleryFiles, dir: String?, ext: String?, base: String?) -> URL? {
+        if base == "tn" {
+            let raw = "https://a.\(HitomiEndpoint.imageHost)/\(dir ?? "")/\(gg.realFullPath(image.hash)).\(ext ?? "")"
+            return URL(string: syncURLString(raw, base: base, dir: nil))
+        }
+        let hashed = syncHashPath(image, dir: dir, ext: ext)
+        return URL(string: syncURLString(hashed, base: base, dir: dir))
+    }
+
+    // MARK: - Routing, public API
+
+    func urlFromUrl(_ url: URL, base: String? = nil, dir: String? = nil) async throws -> URL {
+        try await ensureGg()
+        let replaced = syncURLString(url.absoluteString, base: base, dir: dir)
+        return try hitomiURL(replaced)
+    }
+
+    func urlFromHash(_ galleryID: Int, image: GalleryFiles, dir: String? = nil, ext: String? = nil) async throws -> URL {
+        try await ensureGg()
+        return try hitomiURL(syncHashPath(image, dir: dir, ext: ext))
     }
 
     func urlFromUrlFromHash(_ galleryID: Int, image: GalleryFiles, dir: String? = nil, ext: String? = nil, base: String? = nil) async throws -> URL {
-        if base == "tn" {
-            try await ensureGg()
-            // Kotlin passes only `base` on to urlFromUrl here -- no `dir` -- and
-            // the subdomain does not depend on it for the tn hosts, so the port
-            // does the same.
-            let raw = "https://a.\(HitomiEndpoint.imageHost)/\(dir ?? "")/\(gg.realFullPath(image.hash)).\(ext ?? "")"
-            return try await urlFromUrl(try hitomiURL(raw), base: base)
+        try await ensureGg()
+        guard let url = syncImageURL(image, dir: dir, ext: ext, base: base) else {
+            throw HitomiError.badURL(syncHashPath(image, dir: dir, ext: ext))
         }
-        let hashed = try await urlFromHash(galleryID, image: image, dir: dir, ext: ext)
-        return try await urlFromUrl(hashed, base: base, dir: dir)
+        return url
     }
 
     /// The thumbnail a gallery card shows.
     func thumbnailURL(_ galleryID: Int, image: GalleryFiles, dir: String = "webpbigtn") async throws -> URL {
-        try await urlFromUrlFromHash(galleryID, image: image, dir: dir, ext: "webp", base: "tn")
+        try await ensureGg()
+        let raw = "https://a.\(HitomiEndpoint.imageHost)/\(dir)/\(gg.realFullPath(image.hash)).webp"
+        return try hitomiURL(syncURLString(raw, base: "tn", dir: nil))
     }
 
     /// The page itself, in webp.
     func pageURL(_ galleryID: Int, image: GalleryFiles) async throws -> URL {
-        try await urlFromUrlFromHash(galleryID, image: image, dir: "webp")
+        try await ensureGg()
+        let path = syncHashPath(image, dir: "webp", ext: nil)
+        return try hitomiURL(syncURLString(path, base: nil, dir: "webp"))
+    }
+
+    /// Up to `limit` page URLs, index-aligned with `files`, `nil` where one could
+    /// not be built.
+    ///
+    /// One `gg.js` check for the whole batch and no suspension point inside the
+    /// loop: a reader that materialises 2000 pages pays two actor hops, not
+    /// 2000. Non-throwing and length-preserving, so a caller can show a
+    /// placeholder for the pages it could not resolve instead of losing the
+    /// alignment between slot and page number.
+    func pageURLs(_ galleryID: Int, files: [GalleryFiles], limit: Int) async -> [URL?] {
+        guard limit > 0, !files.isEmpty else { return [] }
+        let slice = Array(files.prefix(limit))
+        do {
+            try await ensureGg()
+        } catch {
+            return Array(repeating: nil, count: slice.count)
+        }
+        return slice.map { image in
+            let path = syncHashPath(image, dir: "webp", ext: nil)
+            return URL(string: syncURLString(path, base: nil, dir: "webp"))
+        }
     }
 
     // MARK: - Galleries
@@ -243,17 +325,36 @@ actor HitomiClient {
     func gallery(_ galleryID: Int) async throws -> Gallery {
         let info = try await galleryInfo(galleryID)
 
-        var cover: URL?
-        if let first = info.fileList.first {
-            cover = try? await thumbnailURL(galleryID, image: first, dir: "webpbigtn")
+        // One routing table read for the cover and the whole strip. If `gg.js`
+        // cannot be had, the metadata still opens -- a detail screen without
+        // pictures beats a detail screen with an error.
+        var routed = true
+        do {
+            try await ensureGg()
+        } catch {
+            routed = false
         }
 
-        var thumbnails: [URL] = []
-        thumbnails.reserveCapacity(info.fileList.count)
-        for file in info.fileList {
-            if let url = try? await thumbnailURL(galleryID, image: file, dir: "webpsmalltn") {
-                thumbnails.append(url)
+        var cover: URL?
+        if routed, let first = info.fileList.first {
+            let raw = "https://a.\(HitomiEndpoint.imageHost)/webpbigtn/\(gg.realFullPath(first.hash)).webp"
+            cover = URL(string: syncURLString(raw, base: "tn", dir: nil))
+        }
+
+        // A gallery can have thousands of pages and the strip shows 30; building
+        // every thumbnail meant thousands of awaits and thousands of retained
+        // URLs for pictures nobody was going to see. Slots stay aligned with the
+        // page number, so `nil` in the middle never shifts the ones after it.
+        let limit = min(HitomiClient.thumbnailLimit, info.fileList.count)
+        var thumbnails: [URL?] = []
+        thumbnails.reserveCapacity(limit)
+        if routed {
+            for file in info.fileList.prefix(limit) {
+                let raw = "https://a.\(HitomiEndpoint.imageHost)/webpsmalltn/\(gg.realFullPath(file.hash)).webp"
+                thumbnails.append(URL(string: syncURLString(raw, base: "tn", dir: nil)))
             }
+        } else {
+            thumbnails = Array(repeating: nil, count: limit)
         }
 
         let languages: [(name: String, galleryID: String)] = (info.languages ?? []).compactMap { entry -> (name: String, galleryID: String)? in

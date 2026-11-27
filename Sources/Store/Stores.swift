@@ -78,6 +78,8 @@ final class Library: ObservableObject {
     private let directory: URL
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
+    /// Serial, so the last write of a burst is the last one on disk.
+    private let writeQueue = DispatchQueue(label: "dev.inugami.pupilios.library-write", qos: .utility)
 
     private init() {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
@@ -102,9 +104,17 @@ final class Library: ObservableObject {
         return (try? decoder.decode(T.self, from: data)) ?? fallback
     }
 
+    /// Encoding happens here, on the main actor, because `encoder` must not be
+    /// touched from another thread; only the write of the finished `Data` is
+    /// handed off. The history and the progress map are rewritten on every
+    /// visit and every page turn, and a synchronous rewrite of the whole file
+    /// on the main thread is a hitch the reader can feel.
     private func save<T: Encodable>(_ value: T, _ name: String) {
         guard let data = try? encoder.encode(value) else { return }
-        try? data.write(to: url(name), options: .atomic)
+        let target = url(name)
+        writeQueue.async {
+            try? data.write(to: target, options: .atomic)
+        }
     }
 
     // MARK: - Favourites
@@ -122,7 +132,15 @@ final class Library: ObservableObject {
 
     // MARK: - History
 
+    /// Records that a gallery was opened.
+    ///
+    /// Opening the gallery already at the head of the list is the common case
+    /// (open, back, open) and it changes nothing, so it returns before touching
+    /// `@Published history`: a publish would re-run `HistoryView`'s
+    /// `.task(id: library.history)` and fetch a whole grid of `gallery.js` for
+    /// a list that did not move.
     func recordVisit(_ id: Int) {
+        if history.first == id { return }
         if let index = history.firstIndex(of: id) {
             history.remove(at: index)
         }
@@ -201,8 +219,16 @@ final class Library: ObservableObject {
 
     func page(for galleryID: Int) -> Int? { progress["\(galleryID)"] }
 
+    /// Saves the page the reader is on.
+    ///
+    /// The reader calls this on every page turn, including the one it just
+    /// restored, so an unchanged value returns before publishing: the publish
+    /// costs a render of whatever observes `Library`, and re-saving would
+    /// re-encode the whole progress map for nothing.
     func setPage(_ page: Int, for galleryID: Int) {
-        progress["\(galleryID)"] = page
+        let key = "\(galleryID)"
+        if progress[key] == page { return }
+        progress[key] = page
         save(progress, "progress")
     }
 

@@ -109,10 +109,14 @@ extension HitomiClient {
         return value
     }
 
-    /// Drops what a refresh has to look at again; both caches outlive a single query.
+    /// Drops what a refresh has to look at again; every cache outlives a single
+    /// query, and every one of them is read through a version stamp that a
+    /// refresh invalidates.
     func invalidateCaches() {
         indexVersions.removeAll()
         suggestionCache.removeAll()
+        indexListingCache.removeAll()
+        indexListingInFlight.removeAll()
     }
 
     // MARK: - Nozomi

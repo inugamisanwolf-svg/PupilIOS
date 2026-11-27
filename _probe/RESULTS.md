@@ -77,9 +77,9 @@ python _probe/verify.py     # 実行してこのファイルを再生成
 
 
 
-## 実行結果（2026-11-27 18:14:08）
+## 実行結果（2026-11-27 18:38:58）
 
-97/97 checks passed
+96/96 checks passed
 
 | 結果 | セクション | チェック | 詳細 |
 |---|---|---|---|
@@ -90,13 +90,13 @@ python _probe/verify.py     # 実行してこのファイルを再生成
 | PASS | gg | load: b is 'digits/' | `b='1795770002/'` |
 | PASS | gg | s(): reorders the last three digits | `s=786` |
 | PASS | gg | realFullPath(): xx/x/hash | `3/12/0000000000000000000000000000000000000000000000000000000000000123` |
-| PASS | nozomi | window(index-all) returns 4 ids | `[4360531, 4360499, 4360495, 4360494]` |
-| PASS | nozomi | Content-Range total divides by 4 | `total=1247538` |
-| PASS | gallery | galleries/4360531.js fetched | `` |
-| PASS | models | id is a string | `'4360531'` |
+| PASS | nozomi | window(index-all) returns 4 ids | `[4360592, 4360590, 4360589, 4360585]` |
+| PASS | nozomi | Content-Range total divides by 4 | `total=1247550` |
+| PASS | gallery | galleries/4360592.js fetched | `` |
+| PASS | models | id is a string | `'4360592'` |
 | PASS | models | title is a string | `` |
-| PASS | models | japanese_title is string or null | `'Artist: エリック'` |
-| PASS | models | files non-empty | `62 files` |
+| PASS | models | japanese_title is string or null | `None` |
+| PASS | models | files non-empty | `21 files` |
 | PASS | models | files[0].hash present | `` |
 | PASS | models | files[0].name present | `` |
 | PASS | models | files[0].width present | `` |
@@ -104,16 +104,15 @@ python _probe/verify.py     # 実行してこのファイルを再生成
 | PASS | models | files[0].width/height are ints | `` |
 | PASS | models | haswebp absent or int | `'<missing>'` |
 | PASS | models | languages present (single language gallery) | `empty -> []` |
-| PASS | models | tags[0].female/male type | `female='1' male=''` |
-| PASS | models | tags[0].tag is a string | `` |
+| PASS | models | tags present (untagged gallery) | `empty -> []` |
 | PASS | models | scene_indexes type | `list` |
 | PASS | models | related type | `list` |
-| PASS | url | webpbigtn answers 200 | `200 https://btn.gold-usergeneratedcontent.net/webpbigtn/1/47/e535ca4b4f1de44202562e2e3c35383a636fe9ba5a4ddc0744d3e582118c1471.webp` |
-| PASS | url | webpbigtn host is <sub>.gold-usergeneratedcontent.net | `https://btn.gold-usergeneratedcontent.net/webpbigtn/1/47/e535ca4b4f1de44202562e2e3c35383a636fe9ba5a4ddc0744d3e582118c1471.webp` |
-| PASS | url | webpsmalltn answers 200 | `200 https://btn.gold-usergeneratedcontent.net/webpsmalltn/1/47/e535ca4b4f1de44202562e2e3c35383a636fe9ba5a4ddc0744d3e582118c1471.webp` |
-| PASS | url | webpsmalltn host is <sub>.gold-usergeneratedcontent.net | `https://btn.gold-usergeneratedcontent.net/webpsmalltn/1/47/e535ca4b4f1de44202562e2e3c35383a636fe9ba5a4ddc0744d3e582118c1471.webp` |
-| PASS | url | webp page answers 200 | `200 https://w2.gold-usergeneratedcontent.net/1795770002/327/e535ca4b4f1de44202562e2e3c35383a636fe9ba5a4ddc0744d3e582118c1471.webp` |
-| PASS | url | webp page host is <sub>.gold-usergeneratedcontent.net | `https://w2.gold-usergeneratedcontent.net/1795770002/327/e535ca4b4f1de44202562e2e3c35383a636fe9ba5a4ddc0744d3e582118c1471.webp` |
+| PASS | url | webpbigtn answers 200 | `200 https://atn.gold-usergeneratedcontent.net/webpbigtn/c/ab/99ce0a017a2d96a74a2b0a62e96349962f00ea2653ccdf41a54b1258afb44abc.webp` |
+| PASS | url | webpbigtn host is <sub>.gold-usergeneratedcontent.net | `https://atn.gold-usergeneratedcontent.net/webpbigtn/c/ab/99ce0a017a2d96a74a2b0a62e96349962f00ea2653ccdf41a54b1258afb44abc.webp` |
+| PASS | url | webpsmalltn answers 200 | `200 https://atn.gold-usergeneratedcontent.net/webpsmalltn/c/ab/99ce0a017a2d96a74a2b0a62e96349962f00ea2653ccdf41a54b1258afb44abc.webp` |
+| PASS | url | webpsmalltn host is <sub>.gold-usergeneratedcontent.net | `https://atn.gold-usergeneratedcontent.net/webpsmalltn/c/ab/99ce0a017a2d96a74a2b0a62e96349962f00ea2653ccdf41a54b1258afb44abc.webp` |
+| PASS | url | webp page answers 200 | `200 https://w1.gold-usergeneratedcontent.net/1795770002/3243/99ce0a017a2d96a74a2b0a62e96349962f00ea2653ccdf41a54b1258afb44abc.webp` |
+| PASS | url | webp page host is <sub>.gold-usergeneratedcontent.net | `https://w1.gold-usergeneratedcontent.net/1795770002/3243/99ce0a017a2d96a74a2b0a62e96349962f00ea2653ccdf41a54b1258afb44abc.webp` |
 | PASS | models | gallery 2785234 has languages[] | `3 entries` |
 | PASS | models | languages[].galleryid is a number in the live payload | `type=int value=3901548` |
 | PASS | models | languages[].galleryid needs a lenient read | `FlexibleString covers int/string` |
@@ -121,22 +120,22 @@ python _probe/verify.py     # 実行してこのファイルを再生成
 | PASS | models | languages[].name present | `'english'` |
 | PASS | models | languages[].language_localname present | `` |
 | PASS | models | japanese_title is null on some galleries | `9/12 sample galleries` |
-| PASS | nozomi | dateAdded/all/index | `206 bytes 0-3/4990152` |
-| PASS | nozomi | datePublished/all/index | `206 bytes 0-3/4990152` |
-| PASS | nozomi | popularToday/all/index | `206 bytes 0-3/674288` |
-| PASS | nozomi | popularWeek/all/index | `206 bytes 0-3/3865828` |
-| PASS | nozomi | popularMonth/all/index | `206 bytes 0-3/4719580` |
-| PASS | nozomi | popularYear/all/index | `206 bytes 0-3/4989232` |
-| PASS | nozomi | dateAdded/all/index | `206 bytes 0-3/2292260` |
-| PASS | nozomi | dateAdded/tag/female:big breasts | `206 bytes 0-3/1908456` |
-| PASS | nozomi | popularWeek/tag/female:big breasts | `206 bytes 0-3/1596100` |
+| PASS | nozomi | dateAdded/all/index | `206 bytes 0-3/4990200` |
+| PASS | nozomi | datePublished/all/index | `206 bytes 0-3/4990200` |
+| PASS | nozomi | popularToday/all/index | `206 bytes 0-3/862744` |
+| PASS | nozomi | popularWeek/all/index | `206 bytes 0-3/3871044` |
+| PASS | nozomi | popularMonth/all/index | `206 bytes 0-3/4720204` |
+| PASS | nozomi | popularYear/all/index | `206 bytes 0-3/4989336` |
+| PASS | nozomi | dateAdded/all/index | `206 bytes 0-3/2292272` |
+| PASS | nozomi | dateAdded/tag/female:big breasts | `206 bytes 0-3/1908460` |
+| PASS | nozomi | popularWeek/tag/female:big breasts | `206 bytes 0-3/1597784` |
 | PASS | nozomi | dateAdded/artist/fukudahda | `206 bytes 0-3/2120` |
-| PASS | nozomi | popularWeek/series/genshin impact | `206 bytes 0-3/53200` |
+| PASS | nozomi | popularWeek/series/genshin impact | `206 bytes 0-3/53276` |
 | PASS | nozomi | 0-95 -> 96 bytes / 24 ids | `96 bytes, 24 ids` |
 | PASS | nozomi | 0-96 would ask for 97 bytes (the old bug) | `97 bytes, 24 ids` |
-| PASS | nozomi | window(offset=10,count=8) matches a raw range | `[4360486, 4360484, 4360483, 4360482, 4360479, 4360476, 4360474, 4360472]` |
-| PASS | nozomi | window returns the file total, not offset+count | `total=1247538` |
-| PASS | nozomi | popularWeek != dateAdded head | `[2785234, 4347238, 4351905, 4349892] vs [4360531, 4360499, 4360495, 4360494]` |
+| PASS | nozomi | window(offset=10,count=8) matches a raw range | `[4360570, 4360569, 4360568, 4360559, 4360531, 4360499, 4360495, 4360494]` |
+| PASS | nozomi | window returns the file total, not offset+count | `total=1247550` |
+| PASS | nozomi | popularWeek != dateAdded head | `[2785234, 4347238, 4351905, 4349892] vs [4360592, 4360590, 4360589, 4360585]` |
 | PASS | btree | galleriesindex version fetched | `'1795769647'` |
 | PASS | btree | root node decodes | `15 keys, 15 datas, 17 subnodes` |
 | PASS | btree | root has B+1 subnode slots | `` |
@@ -155,8 +154,8 @@ python _probe/verify.py     # 実行してこのファイルを再生成
 | PASS | suggest | global:"big" -> [tag, count, namespace] | `sample=['big breasts', 477114, 'female']` |
 | PASS | suggest | female:"big breasts" | `1 entries https://tagindex.hitomi.la/female/b/i/g/_/b/r/e/a/s/t/s.json first=['big breasts', 477114, 'female']` |
 | PASS | suggest | female:"big breasts" -> [tag, count, namespace] | `sample=['big breasts', 477114, 'female']` |
-| PASS | suggest | global:"nakadashi" | `2 entries https://tagindex.hitomi.la/global/n/a/k/a/d/a/s/h/i.json first=['nakadashi', 270776, 'female']` |
-| PASS | suggest | global:"nakadashi" -> [tag, count, namespace] | `sample=['nakadashi', 270776, 'female']` |
+| PASS | suggest | global:"nakadashi" | `2 entries https://tagindex.hitomi.la/global/n/a/k/a/d/a/s/h/i.json first=['nakadashi', 270780, 'female']` |
+| PASS | suggest | global:"nakadashi" -> [tag, count, namespace] | `sample=['nakadashi', 270780, 'female']` |
 | PASS | suggest | japanese term is percent-encoded | `https://tagindex.hitomi.la/global/%E5%B7%A8/%E4%B9%B3.json` |
 | PASS | suggest | japanese term answers 404 (tag index is english-only) | `404 text/html; charset=UTF-8 556` |
 | PASS | suggest | empty term -> /global.json | `https://tagindex.hitomi.la/global.json` |

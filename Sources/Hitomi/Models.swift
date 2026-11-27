@@ -250,7 +250,16 @@ struct Gallery {
     let series: [String]
     let characters: [String]
     let tags: [String]
-    let thumbnails: [URL]
+    /// The first `HitomiClient.thumbnailLimit` page thumbnails, index `i` being
+    /// page `i + 1`.
+    ///
+    /// Optional elements, not a filtered array: a thumbnail that could not be
+    /// resolved keeps its slot as `nil`, so tapping slot *n* can never open page
+    /// *n+1*. Only the head is resolved -- the detail strip shows 30 of them and
+    /// a gallery may have thousands of pages -- and `pageCount` still carries the
+    /// real total; the remaining pages are resolved by the reader through
+    /// `pageURL` / `pageURLs`.
+    let thumbnails: [URL?]
     let coverAspectRatio: CGFloat
     let pageCount: Int
     let info: GalleryInfo

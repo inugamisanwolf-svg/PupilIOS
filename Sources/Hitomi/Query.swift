@@ -247,8 +247,67 @@ struct SearchContext {
 
 extension HitomiClient {
 
+    /// Every gallery ID in one index listing -- the whole `all` nozomi file.
+    ///
+    /// Memoised because that file is ~1.25M ids (measured: 4,990,152 bytes, so
+    /// ~10 MB as `[Int]`): a query built out of NOT or OR asks for it, and
+    /// `evaluate` asks again for ranking, and a search history of two such
+    /// queries would hold two copies. The key is the file's own address, which
+    /// means `.random` and `.dateAdded` share the single entry they would
+    /// otherwise each drag in, and the language is part of the address.
+    ///
+    /// A caller that arrives while the read is still running waits on it rather
+    /// than starting a second one: two concurrent downloads of the same 10 MB
+    /// file is the case that gets the app jetsammed, and tapping a negated tag
+    /// search twice does exactly that.
     func allGalleryIDs(_ sort: SortMode, language: String = "all") async throws -> [Int] {
-        try await galleryIDsFromNozomi(SearchArgs(area: "all", tag: "index", language: language), sort)
+        let args = SearchArgs(area: "all", tag: "index", language: language)
+        let key = nozomiAddress(args, sort)
+
+        if let cached = indexListingCache[key],
+           Date().timeIntervalSince(cached.at) < HitomiClient.indexVersionTTL {
+            return cached.ids
+        }
+
+        if let running = indexListingInFlight[key] {
+            return try await running.value
+        }
+
+        let task = Task { [self] in
+            try await self.loadIndexListing(args: args, sort: sort, key: key)
+        }
+        indexListingInFlight[key] = task
+        defer { indexListingInFlight[key] = nil }
+        return try await task.value
+    }
+
+    private func loadIndexListing(args: SearchArgs, sort: SortMode, key: String) async throws -> [Int] {
+        let ids = try await galleryIDsFromNozomi(args, sort)
+        indexListingCache[key] = (ids, Date())
+        evictIndexListingIfNeeded()
+        return ids
+    }
+
+    /// Keeps `indexListingCache` at `HitomiClient.indexListingCacheLimit`
+    /// entries, dropping the one resolved longest ago.
+    private func evictIndexListingIfNeeded() {
+        while indexListingCache.count > HitomiClient.indexListingCacheLimit {
+            var victimKey: String?
+            var victimDate: Date?
+            for (key, entry) in indexListingCache {
+                if let oldest = victimDate {
+                    if entry.at < oldest {
+                        victimKey = key
+                        victimDate = entry.at
+                    }
+                } else {
+                    victimKey = key
+                    victimDate = entry.at
+                }
+            }
+            guard let victim = victimKey else { return }
+            indexListingCache[victim] = nil
+        }
     }
 
     /// Every favourited `artist:` and `group:` tag, ORed together -- a work is
