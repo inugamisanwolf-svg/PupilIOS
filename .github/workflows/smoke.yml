@@ -1,8 +1,10 @@
 name: smoke
 
-# Temporary foundation check: proves brew/xcodegen/xcodebuild/zip/plistbuddy/
-# upload-artifact all work on the runner, using a throwaway minimal SwiftUI app.
-# Triggered manually only; deleted once the real pipeline is green.
+# Temporary foundation check (workflow_dispatch only):
+#  - brew / xcodegen / xcodebuild / zip / PlistBuddy / upload-artifact が runner で通るか
+#  - XcodeGen の `type: folder` が Resources/tags と Resources/astryx を
+#    バンドル内でディレクトリ構造のままコピーするか
+# 実プロジェクトのコンパイルに依存せず、基盤だけを切り分けるための使い捨て。
 on:
   workflow_dispatch:
 
@@ -20,11 +22,14 @@ jobs:
       - name: Install XcodeGen
         run: brew install xcodegen && xcodegen --version
 
-      - name: Scaffold a minimal SwiftUI app
+      - name: Scaffold a minimal SwiftUI app with folder references
         run: |
           set -euo pipefail
           WORK="$RUNNER_TEMP/smoke"
-          mkdir -p "$WORK/Sources" "$WORK/Resources/Assets.xcassets/AppIcon.appiconset"
+          mkdir -p "$WORK/Sources" \
+                   "$WORK/Resources/Assets.xcassets/AppIcon.appiconset" \
+                   "$WORK/Resources/tags" \
+                   "$WORK/Resources/astryx"
           cat > "$WORK/project.yml" <<'YML'
           name: Smoke
           options:
@@ -38,6 +43,7 @@ jobs:
               CODE_SIGNING_ALLOWED: NO
               CODE_SIGNING_REQUIRED: NO
               ENABLE_BITCODE: NO
+              ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
           targets:
             Smoke:
               type: application
@@ -45,7 +51,14 @@ jobs:
               sources:
                 - path: Sources
                 - path: Resources
-                  excludes: ["Info.plist"]
+                  excludes:
+                    - "Info.plist"
+                    - "tags"
+                    - "astryx"
+                - path: Resources/tags
+                  type: folder
+                - path: Resources/astryx
+                  type: folder
               settings:
                 base:
                   PRODUCT_BUNDLE_IDENTIFIER: dev.inugami.smoke
@@ -83,18 +96,33 @@ jobs:
           </dict>
           </plist>
           PLIST
-          cat > "$WORK/Resources/Assets.xcassets/Contents.json" <<'JSON'
-          { "info": { "author": "xcode", "version": 1 } }
-          JSON
+          echo '{ "info": { "author": "xcode", "version": 1 } }' \
+            > "$WORK/Resources/Assets.xcassets/Contents.json"
           echo '{
-            "images" : [ { "idiom" : "universal", "platform" : "ios", "size" : "1024x1024" } ],
+            "images" : [
+              {
+                "filename" : "AppIcon-1024.png",
+                "idiom" : "universal",
+                "platform" : "ios",
+                "size" : "1024x1024"
+              }
+            ],
             "info" : { "author" : "xcode", "version" : 1 }
           }' > "$WORK/Resources/Assets.xcassets/AppIcon.appiconset/Contents.json"
+          # 1x1 PNG -> 1024x1024 so actool has something real to compile
+          echo 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==' \
+            | base64 -d > "$WORK/icon.png"
+          sips -z 1024 1024 "$WORK/icon.png" \
+            --out "$WORK/Resources/Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png" >/dev/null
+          echo '{"es": {"tag": "test"}}' > "$WORK/Resources/tags/es.json"
+          echo '<!doctype html><title>astryx</title>' > "$WORK/Resources/astryx/pupil-astryx.html"
+          echo '/* css */' > "$WORK/Resources/astryx/astryx.css"
+          echo '// js' > "$WORK/Resources/astryx/astryx.js"
           cd "$WORK"
           xcodegen generate --spec project.yml
-          ls -la
+          grep -n "tags\|astryx" Smoke.xcodeproj/project.pbxproj | head -20
 
-      - name: Build + package
+      - name: Build + package + verify bundle layout
         run: |
           set -euo pipefail
           cd "$RUNNER_TEMP/smoke"
@@ -102,13 +130,21 @@ jobs:
             -configuration Release -derivedDataPath build \
             -destination 'generic/platform=iOS' \
             CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO \
-            build 2>&1 | tee build.log | grep -E "error:|BUILD" | tail -n 40
+            build 2>&1 | tee build.log | grep -E "error:|Copying|BUILD" | tail -n 40
           APP="build/Build/Products/Release-iphoneos/Smoke.app"
           test -d "$APP"
+          echo "--- bundle tree ---"
+          find "$APP" -maxdepth 2 | sort
+          echo "--- folder reference assertions ---"
+          test -f "$APP/tags/es.json"             && echo "OK tags/es.json"
+          test -f "$APP/astryx/pupil-astryx.html" && echo "OK astryx/pupil-astryx.html"
+          test -f "$APP/astryx/astryx.js"         && echo "OK astryx/astryx.js"
+          test -f "$APP/astryx/astryx.css"        && echo "OK astryx/astryx.css"
+          test -f "$APP/Assets.car"               && echo "OK Assets.car"
           mkdir -p Payload && cp -R "$APP" Payload/
           zip -qry Smoke-unsigned.ipa Payload
           /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Info.plist"
-          unzip -l Smoke-unsigned.ipa | head -20
+          unzip -l Smoke-unsigned.ipa | head -30
           ls -lh Smoke-unsigned.ipa
 
       - uses: actions/upload-artifact@v4

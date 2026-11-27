@@ -70,6 +70,14 @@ struct ZoomablePageView: UIViewRepresentable {
             key = newKey
 
             task?.cancel()
+
+            // メモリに載っているページ（戻りスワイプ、先読み済みの隣）は待たずに出す。
+            // ここで一度スピナーを出してから差し替えると、ページ送りのたびに点滅する。
+            if let cached = ImageCache.shared.cachedImage(for: url) {
+                view.show(image: cached)
+                return
+            }
+
             view.beginLoading()
 
             task = Task { @MainActor in
@@ -189,6 +197,16 @@ final class ZoomScrollView: UIScrollView, UIScrollViewDelegate {
         layoutIfNeeded()
     }
 
+    /// 取得済みのページを、スピナーを出さずにそのまま置く。
+    func show(image: UIImage) {
+        spinner.stopAnimating()
+        messageLabel.isHidden = true
+        imageView.image = image
+        setZoomScale(minimumZoomScale, animated: false)
+        setNeedsLayout()
+        layoutIfNeeded()
+    }
+
     func resetToPlaceholder() {
         imageView.image = nil
         messageLabel.isHidden = true
@@ -225,13 +243,22 @@ final class ZoomScrollView: UIScrollView, UIScrollViewDelegate {
             imageView.frame = CGRect(origin: .zero, size: fitted)
         }
 
-        contentSize = fitted
-        contentInset = UIEdgeInsets(
+        // 変化した時だけ書く。`layoutSubviews` の中で無条件に contentSize /
+        // contentInset を書き換えると、その書き換えがまたレイアウトを要求して
+        // ループする。
+        if contentSize != fitted {
+            contentSize = fitted
+        }
+
+        let insets = UIEdgeInsets(
             top: max(0, (size.height - fitted.height) / 2),
             left: max(0, (size.width - fitted.width) / 2),
             bottom: 0,
             right: 0
         )
+        if contentInset != insets {
+            contentInset = insets
+        }
     }
 
     private func fittedSize(for imageSize: CGSize, in box: CGSize) -> CGSize {

@@ -67,9 +67,14 @@ final class GalleryListModel: ObservableObject {
         reset()
     }
 
-    /// View の `.task(id:)` から呼ぶ想定。`configure` 済みであることが前提。
+    /// View の `.task(id:)` から呼ぶ想定。同じ条件で既に表示済みなら何もしない
+    /// （タブ切り替えで `task` が再実行されてもスクロール位置と一覧を保つ）。
     func configureAndStart(source: GalleryListSource, perPage: Int) async {
-        configure(source: source, perPage: perPage)
+        let page = max(perPage, 1)
+        if self.source == source && self.perPage == page && !blocks.isEmpty {
+            return
+        }
+        configure(source: source, perPage: page)
         await start()
     }
 

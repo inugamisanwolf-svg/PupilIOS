@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /// 設定タブ。
 ///
@@ -182,6 +183,16 @@ enum PupilIOSAppInfo {
     }
 }
 
+/// Astryx 面から飛んできた URL を開く。http/https だけ通す。
+private func openExternalURL(_ string: String?) {
+    guard let string = string,
+          let url = URL(string: string),
+          let scheme = url.scheme?.lowercased(),
+          scheme == "http" || scheme == "https" else { return }
+
+    UIApplication.shared.open(url, options: [:], completionHandler: nil)
+}
+
 // MARK: - Astryx 設定面
 
 /// 本物の Astryx を WKWebView で描いた設定面。
@@ -236,7 +247,22 @@ private struct AstryxSettingsSurface: View {
         ]
     }
 
+    /// Astryx（JS）からのイベント。
+    ///
+    /// `setting` は `{key, value}`、`openurl` は `{url}`、`ready` は `{surface, core}`。
+    /// `ready` は何もしない。`setting` のキーが `payload` に無く `name` 自体に
+    /// なっている場合も同じ経路で扱う（Astryx 側の実装がどちらでも動くように）。
     private func apply(_ name: String, _ eventPayload: [String: String]) {
+        switch name {
+        case "openurl":
+            openExternalURL(eventPayload["url"])
+            return
+        case "ready":
+            return
+        default:
+            break
+        }
+
         let key = eventPayload["key"] ?? name
         let value = eventPayload["value"] ?? ""
 
@@ -330,7 +356,7 @@ private struct AboutView: View {
                         .foregroundColor(theme.textSecondary)
                 }
 
-                AstryxWebView(surface: .about, payload: aboutPayload, onEvent: { _, _ in })
+                AstryxWebView(surface: .about, payload: aboutPayload, onEvent: handleEvent)
                     .frame(height: 620)
                     .clipShape(RoundedRectangle(cornerRadius: theme.radiusLarge, style: .continuous))
                     .overlay(
@@ -353,5 +379,11 @@ private struct AboutView: View {
             "upstream": "https://codeberg.org/pupil/Pupil",
             "astryxLicense": "MIT",
         ]
+    }
+
+    /// About 面のイベント。`openurl` だけ拾う。
+    private func handleEvent(_ name: String, _ payload: [String: String]) {
+        guard name == "openurl" else { return }
+        openExternalURL(payload["url"])
     }
 }

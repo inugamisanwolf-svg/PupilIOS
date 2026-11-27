@@ -71,13 +71,19 @@ function post(name, payload) {
 /* -------------------------------------------------------------------------- */
 
 const DEFAULTS = {
+  /* Swift 側 (ui-reader / Root SettingsView) が送るキー。値はすべて文字列。 */
+  appName: 'PupilIOS',
+  appVersion: '1.0.0',
   japaneseTitles: 'false',
   tagTranslation: '',
-  tagLanguages: 'es,id,ko,zh',
+  tagTranslationLanguages: 'es,id,ko,zh',
   perPage: '20',
   theme: 'system',
   browseSort: 'dateAdded',
-  appVersion: '1.0.0',
+  browseLanguage: 'all',
+  languages: 'all=すべて,ja=日本語,en=English,zh=中文,es=Español,id=Indonesia,ko=한국어',
+  sortModes:
+    'dateAdded=追加順,datePublished=公開順,popularToday=今日の人気,popularWeek=今週の人気,popularMonth=今月の人気,popularYear=今年の人気,random=ランダム',
 };
 
 function initialSurface() {
@@ -178,14 +184,49 @@ function clampPerPage(current, delta) {
 }
 
 function languagesFrom(list) {
-  return String(list || DEFAULTS.tagLanguages)
+  return String(list || DEFAULTS.tagTranslationLanguages)
     .split(',')
     .map((item) => item.trim())
     .filter(Boolean);
 }
 
+/** "id=ラベル,id=ラベル" -> [{id, label}]。Swift 側の [(id, label)] を平坦化した文字列用。 */
+function parsePairs(text) {
+  return String(text || '')
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .map((item) => {
+      const at = item.indexOf('=');
+      if (at < 0) return { id: item, label: item };
+      const id = item.slice(0, at).trim();
+      const label = item.slice(at + 1).trim();
+      return { id, label: label || id };
+    });
+}
+
+function ChoiceRow({ label, options, value, onSelect }) {
+  if (options.length === 0) return null;
+  return (
+    <VStack gap={2}>
+      <Text type="label">{label}</Text>
+      <HStack gap={2} wrap="wrap">
+        {options.map((option) => (
+          <Button
+            key={option.id}
+            label={option.label}
+            size="sm"
+            variant={value === option.id ? 'primary' : 'secondary'}
+            onClick={() => onSelect(option.id)}
+          />
+        ))}
+      </HStack>
+    </VStack>
+  );
+}
+
 function LanguageSwitch({ settings, onChange }) {
-  const languages = languagesFrom(settings.tagLanguages);
+  const languages = languagesFrom(settings.tagTranslationLanguages);
   const enabled = settings.tagTranslation !== '';
   return (
     <Switch
@@ -212,18 +253,7 @@ function ThemePicker({ value, onChange }) {
   ];
   return (
     <VStack gap={2}>
-      <Text type="label">テーマ</Text>
-      <HStack gap={2} wrap="wrap">
-        {options.map((option) => (
-          <Button
-            key={option.id}
-            label={option.label}
-            size="sm"
-            variant={value === option.id ? 'primary' : 'secondary'}
-            onClick={() => onChange('theme', option.id)}
-          />
-        ))}
-      </HStack>
+      <ChoiceRow label="テーマ" options={options} value={value} onSelect={(id) => onChange('theme', id)} />
       <Text type="supporting" color="secondary">
         Astryx の面は常にダークトークンで描画しています（theme-neutral）。
       </Text>
@@ -297,6 +327,20 @@ function SettingsSurface({ settings }) {
           <Heading level={3}>ブラウズ</Heading>
           <PerPageStepper value={settings.perPage} onChange={onChange} />
           <Divider />
+          <ChoiceRow
+            label="ブラウズ言語"
+            options={parsePairs(settings.languages)}
+            value={settings.browseLanguage}
+            onSelect={(id) => onChange('browseLanguage', id)}
+          />
+          <Divider />
+          <ChoiceRow
+            label="既定の並び順"
+            options={parsePairs(settings.sortModes)}
+            value={settings.browseSort}
+            onSelect={(id) => onChange('browseSort', id)}
+          />
+          <Divider />
           <ThemePicker value={settings.theme} onChange={onChange} />
         </VStack>
       </Card>
@@ -304,13 +348,15 @@ function SettingsSurface({ settings }) {
       <HStack gap={2} vAlign="center" wrap="wrap" padding={1}>
         <Badge label={`perPage ${settings.perPage}`} />
         <Badge label={`sort ${settings.browseSort}`} />
-        <Badge label={`lang ${settings.tagTranslation || 'off'}`} />
+        <Badge label={`lang ${settings.browseLanguage}`} />
+        <Badge label={`tag ${settings.tagTranslation || 'off'}`} />
       </HStack>
     </VStack>
   );
 }
 
-function AboutSurface() {
+function AboutSurface({ settings }) {
+  const appName = settings.appName || DEFAULTS.appName;
   return (
     <VStack gap={4} padding={4} width="100%">
       <VStack gap={1}>
@@ -323,12 +369,15 @@ function AboutSurface() {
       <Card padding={4}>
         <VStack gap={3}>
           <HStack gap={2} vAlign="center" wrap="wrap">
-            <Heading level={2}>PupilIOS</Heading>
+            <Heading level={2}>{appName}</Heading>
             <Badge label="GPLv3" />
           </HStack>
           <Text type="body">
             Android アプリ Pupil（Kotlin）の SwiftUI 移植です。ブラウズ・検索・お気に入り・履歴・
             リーダーを iOS 16 以降で動かします。
+          </Text>
+          <Text type="supporting" color="secondary">
+            バージョン {settings.appVersion || DEFAULTS.appVersion}
           </Text>
           <Divider />
           <VStack gap={1}>
@@ -405,7 +454,12 @@ function App() {
   }, [surface]);
 
   const body = useMemo(
-    () => (surface === 'about' ? <AboutSurface /> : <SettingsSurface settings={settings} />),
+    () =>
+      surface === 'about' ? (
+        <AboutSurface settings={settings} />
+      ) : (
+        <SettingsSurface settings={settings} />
+      ),
     [surface, settings]
   );
 

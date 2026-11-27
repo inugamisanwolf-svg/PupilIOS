@@ -31,6 +31,15 @@ targets:
       - path: Resources
         excludes:
           - "Info.plist"
+          - "tags"
+          - "astryx"
+      # folder references: keep tags/ and astryx/ as directories inside the bundle
+      # (Bundle.main.url(..., subdirectory: "tags") and the WKWebView relative
+      #  astryx.js / astryx.css loads both depend on the structure being preserved)
+      - path: Resources/tags
+        type: folder
+      - path: Resources/astryx
+        type: folder
     settings:
       base:
         PRODUCT_NAME: PupilIOS

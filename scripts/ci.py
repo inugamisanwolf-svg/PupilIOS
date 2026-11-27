@@ -154,12 +154,12 @@ def download(url: str, tok: str) -> bytes:
 
 
 # --------------------------------------------------------------------------- verbs
-def dispatch(tok: str, ref: str = DEFAULT_REF) -> None:
-    path = f"/repos/{OWNER}/{REPO}/actions/workflows/{WORKFLOW}/dispatches"
+def dispatch(tok: str, ref: str = DEFAULT_REF, workflow: str = WORKFLOW) -> None:
+    path = f"/repos/{OWNER}/{REPO}/actions/workflows/{workflow}/dispatches"
     status, payload, _ = api(path, tok, method="POST", body={"ref": ref})
     if status not in (204, 201, 200):
         sys.exit(f"dispatch failed: HTTP {status} {payload[:400].decode('utf-8', 'replace')}")
-    print(f"dispatched {WORKFLOW} on ref={ref}")
+    print(f"dispatched {workflow} on ref={ref}")
 
 
 def list_runs(tok: str, limit: int = 10) -> list[dict]:
@@ -380,7 +380,8 @@ def main() -> None:
 
     p = sub.add_parser("dispatch")
     p.add_argument("--ref", default=DEFAULT_REF)
-    p.set_defaults(func=lambda a, t: dispatch(t, a.ref))
+    p.add_argument("--workflow", default=WORKFLOW)
+    p.set_defaults(func=lambda a, t: dispatch(t, a.ref, a.workflow))
 
     p = sub.add_parser("status")
     p.add_argument("--limit", type=int, default=10)

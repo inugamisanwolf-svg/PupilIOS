@@ -14,7 +14,6 @@ struct GalleryDetailView: View {
     @State private var errorMessage: String?
     @State private var showReader: Bool = false
     @State private var readerPage: Int = 0
-    @State private var didLoad: Bool = false
 
     private static let knownNamespaces: Set<String> = [
         "female", "male", "artist", "group", "character", "series", "type", "language", "tag",
@@ -30,7 +29,9 @@ struct GalleryDetailView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: theme.space(.md)) {
                 if let gallery = gallery {
-                    header(gallery)
+                    AstryxCard {
+                        header(gallery)
+                    }
                     actionBar(gallery)
                     AstryxDivider()
                     languageSection(gallery)
@@ -54,7 +55,7 @@ struct GalleryDetailView: View {
             .padding(theme.space(.md))
         }
         .background(theme.background)
-        .navigationTitle(navigationTitle)
+        .navigationTitle(titleText)
         .navigationBarTitleDisplayMode(.inline)
         .task {
             await load()
@@ -67,7 +68,7 @@ struct GalleryDetailView: View {
         }
     }
 
-    private var navigationTitle: String {
+    private var titleText: String {
         if let gallery = gallery {
             return gallery.displayTitle(japaneseTitles: settings.japaneseTitles)
         }

@@ -102,8 +102,12 @@ struct ReaderOverlay: View {
                 .accessibilityLabel("ページ")
             }
 
-            AstryxProgressDots(current: shownPage, total: total)
-                .frame(maxWidth: .infinity)
+            // dots は総ページ数が多いと潰れるので、少ないときだけ出す。
+            // ページ番号そのものは上の `n / total` が常に持っている。
+            if pageCount <= 30 {
+                AstryxProgressDots(current: shownPage, total: total)
+                    .frame(maxWidth: .infinity)
+            }
         }
         .padding(.horizontal, theme.space(.md))
         .padding(.top, theme.space(.xxs))

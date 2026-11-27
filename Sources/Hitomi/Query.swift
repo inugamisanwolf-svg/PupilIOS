@@ -1,6 +1,14 @@
 import Foundation
 
-enum SearchQuery: Equatable {
+/// Structured search query.
+///
+/// The plain text a search box takes can only say "these terms, minus those";
+/// this tree can also hold an OR, the favourite artists and the read-later
+/// list, which is what the app needs to offer a search built from local state.
+///
+/// `indirect`: the AND/OR nodes hold arrays of queries and NOT holds one, so the
+/// type is recursive and the compiler needs the box.
+indirect enum SearchQuery: Equatable {
     case tag(namespace: String?, tag: String)
     case and([SearchQuery])
     case or([SearchQuery])
@@ -8,24 +16,18 @@ enum SearchQuery: Equatable {
     case favoriteArtists
     case readLater
 
+    /// The plain text spelling, or `""` for a query that has none.
+    ///
+    /// This is the same function the search history is written with --
+    /// `QueryLanguage.text(of:)` -- so a query restored from history parses
+    /// back into the query it came from.
     var text: String {
-        switch self {
-        case .tag(let namespace, let tag):
-            guard let namespace, !namespace.isEmpty else { return tag }
-            return "\(namespace):\(tag)"
-        case .and(let queries):
-            return queries.map { $0.text }.joined(separator: " ")
-        case .or(let queries):
-            return "(" + queries.map { $0.text }.joined(separator: " | ") + ")"
-        case .not(let query):
-            return "-" + query.text
-        case .favoriteArtists:
-            return "favoriteArtists"
-        case .readLater:
-            return "readLater"
-        }
+        QueryLanguage.text(of: self) ?? ""
     }
 
+    /// Whether the result has to be put back in the index's order: a union
+    /// takes whichever branch reached an ID first, which is an artifact of the
+    /// request rather than anything to show a reader.
     var needsRanking: Bool {
         switch self {
         case .tag, .readLater:
@@ -39,6 +41,8 @@ enum SearchQuery: Equatable {
         }
     }
 
+    /// Whether the read-later list decides part of the result, so a change to
+    /// it changes the list.
     var usesReadLater: Bool {
         switch self {
         case .readLater:
@@ -52,10 +56,24 @@ enum SearchQuery: Equatable {
         }
     }
 
+    /// The terms of the top level conjunction, the ones that can be taken out
+    /// of it on their own.
     var terms: [SearchQuery] {
         switch self {
         case .and(let queries): return queries
         default: return [self]
+        }
+    }
+
+    /// The query with `term` taken out of its top level conjunction.
+    func removing(_ term: SearchQuery) -> SearchQuery? {
+        if self == term { return nil }
+        guard case .and(let queries) = self else { return self }
+        let rest = queries.filter { $0 != term }
+        switch rest.count {
+        case 0: return nil
+        case 1: return rest[0]
+        default: return .and(rest)
         }
     }
 }
@@ -66,19 +84,26 @@ enum QueryLanguage {
     ]
 
     static func normalizeTag(_ value: String) -> String {
-        value.replacingOccurrences(of: "_", with: " ").lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        value.replacingOccurrences(of: "_", with: " ")
+            .lowercased()
+            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     static func parseTerm(_ term: String) -> ParsedTag? {
-        let separator = term.firstIndex(of: ":")
-        let namespaceCandidate = separator.map { String(term[term.startIndex..<$0]).lowercased() } ?? ""
-
-        if let separator, validNamespaces.contains(namespaceCandidate) {
-            let name = normalizeTag(String(term[term.index(after: separator)...]))
+        guard let separator = term.firstIndex(of: ":") else {
+            let name = normalizeTag(term)
             guard !name.isEmpty else { return nil }
-            return ParsedTag(namespace: namespaceCandidate, tag: name)
+            return ParsedTag(namespace: nil, tag: name)
         }
 
+        let candidate = String(term[term.startIndex..<separator]).lowercased()
+        if validNamespaces.contains(candidate) {
+            let name = normalizeTag(String(term[term.index(after: separator)...]))
+            guard !name.isEmpty else { return nil }
+            return ParsedTag(namespace: candidate, tag: name)
+        }
+
+        // A colon that names no namespace is just part of the text.
         let name = normalizeTag(term)
         guard !name.isEmpty else { return nil }
         return ParsedTag(namespace: nil, tag: name)
@@ -105,25 +130,56 @@ enum QueryLanguage {
         }
     }
 
+    /// **The one spelling.** Anything that turns a query into text -- the search
+    /// box, the history, a chip that re-runs an old search -- comes through
+    /// here, so `SearchQuery.text` and the stored string cannot drift apart.
+    ///
+    /// nil for a query with no spelling: an OR group, the favourite artists
+    /// and the read-later list all resolve to a list only this app knows.
     static func text(of query: SearchQuery) -> String? {
         switch query {
         case .tag(let namespace, let tag):
-            let term = (namespace.map { "\($0):" } ?? "") + tag
-            return term.replacingOccurrences(of: " ", with: "_")
+            return termText(namespace: namespace, tag: tag)
+
         case .not(let inner):
             guard case .tag(let namespace, let tag) = inner else { return nil }
-            let term = (namespace.map { "\($0):" } ?? "") + tag
-            return "-" + term.replacingOccurrences(of: " ", with: "_")
+            return "-" + termText(namespace: namespace, tag: tag)
+
         case .and(let queries):
             var out: [String] = []
-            for query in queries {
-                guard let piece = text(of: query) else { return nil }
+            out.reserveCapacity(queries.count)
+            for child in queries {
+                guard let piece = text(of: child) else { return nil }
                 out.append(piece)
             }
             return out.joined(separator: " ")
+
         case .or, .favoriteArtists, .readLater:
             return nil
         }
+    }
+
+    /// `namespace:tag` with the tag's spaces written as underscores, which is
+    /// what hitomi's own search box and the stored history line use.
+    static func termText(namespace: String?, tag: String) -> String {
+        let body = tag.replacingOccurrences(of: " ", with: "_")
+        guard let namespace = namespace, !namespace.isEmpty else { return body }
+        return namespace + ":" + body
+    }
+
+    /// The text to keep for a line the user submitted, or nil when the line is
+    /// not a search worth offering back.
+    ///
+    /// A line that parses is re-spelled from the parse, so `Female:Big Breasts`
+    /// is stored as `female:big_breasts` and restores into the same query;
+    /// a line that does not parse is kept as the user typed it.
+    static func canonicalHistoryText(_ line: String) -> String? {
+        let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        if let query = parse(trimmed), let spelled = text(of: query) {
+            return spelled
+        }
+        return trimmed
     }
 }
 
@@ -132,8 +188,7 @@ struct ParsedTag {
     let tag: String
 
     var text: String {
-        guard let namespace, !namespace.isEmpty else { return tag }
-        return "\(namespace):\(tag)"
+        QueryLanguage.termText(namespace: namespace, tag: tag)
     }
 }
 
@@ -163,12 +218,13 @@ enum IdSet {
     }
 
     /// Keeps `ids` in the order `order` gives them, appending anything `order`
-    /// does not know about.
+    /// does not know about (Kotlin: `rankedBy`).
     static func ranked(_ ids: [Int], by order: [Int]) -> [Int] {
         let wanted = Set(ids)
         var remaining = wanted
         var out: [Int] = []
-        for id in order where wanted.contains(id) && remaining.contains(id) {
+        out.reserveCapacity(ids.count)
+        for id in order where remaining.contains(id) {
             remaining.remove(id)
             out.append(id)
         }
@@ -180,9 +236,13 @@ enum IdSet {
     }
 }
 
+/// What a query may look at besides hitomi: the tags the reader favourited and
+/// the galleries they put aside.
 struct SearchContext {
     var favoriteTags: [String] = []
     var readLater: [Int] = []
+
+    static let empty = SearchContext()
 }
 
 extension HitomiClient {
@@ -191,24 +251,28 @@ extension HitomiClient {
         try await galleryIDsFromNozomi(SearchArgs(area: "all", tag: "index", language: language), sort)
     }
 
+    /// Every favourited `artist:` and `group:` tag, ORed together -- a work is
+    /// often credited to the circle rather than the person, so following one
+    /// without the other misses half of what it is credited to.
     private func favoriteArtistQueries(_ context: SearchContext) -> [SearchQuery] {
-        context.favoriteTags.compactMap { tag in
-            let parts = tag.components(separatedBy: ":")
-            guard parts.count >= 2 else { return nil }
-            let namespace = parts[0]
+        context.favoriteTags.compactMap { tag -> SearchQuery? in
+            guard let separator = tag.firstIndex(of: ":") else { return nil }
+            let namespace = String(tag[tag.startIndex..<separator])
             guard namespace == "artist" || namespace == "group" else { return nil }
-            let name = parts.dropFirst().joined(separator: ":")
-            return SearchQuery.tag(namespace: namespace, tag: name)
+            let name = String(tag[tag.index(after: separator)...])
+            guard !name.isEmpty else { return nil }
+            return .tag(namespace: namespace, tag: name)
         }
     }
 
     private func lookup(namespace: String?, tag: String, sort: SortMode) async throws -> [Int] {
-        let text = (namespace.map { "\($0):" } ?? "") + tag
+        let text = QueryLanguage.termText(namespace: namespace, tag: tag)
         return try await galleryIDs(forQuery: text.lowercased(), sort: sort)
     }
 
-    /// Resolves a query against hitomi, with `all` asked for only where a query
-    /// says nothing about what to include.
+    /// Resolves a query against hitomi, asking for the whole index only where
+    /// the query says nothing about what to include -- a lone negation, or a
+    /// conjunction of them.
     func evaluateEverywhere(_ query: SearchQuery, sort: SortMode, context: SearchContext) async throws -> [Int] {
         switch query {
         case .tag(let namespace, let tag):
@@ -220,7 +284,7 @@ extension HitomiClient {
             return try await evaluateEverywhere(.or(artists), sort: sort, context: context)
 
         case .readLater:
-            return context.readLater.reversed()
+            return Array(context.readLater.reversed())
 
         case .and(let queries):
             let negatives = queries.filter { if case .not = $0 { return true } else { return false } }
@@ -232,7 +296,11 @@ extension HitomiClient {
             } else {
                 for positive in positives {
                     let ids = try await evaluateEverywhere(positive, sort: sort, context: context)
-                    included = included.map { IdSet.intersect($0, ids) } ?? ids
+                    if let current = included {
+                        included = IdSet.intersect(current, ids)
+                    } else {
+                        included = ids
+                    }
                 }
             }
 
@@ -246,8 +314,9 @@ extension HitomiClient {
 
         case .or(let queries):
             var branches: [[Int]] = []
-            for query in queries {
-                branches.append(try await evaluateEverywhere(query, sort: sort, context: context))
+            branches.reserveCapacity(queries.count)
+            for child in queries {
+                branches.append(try await evaluateEverywhere(child, sort: sort, context: context))
             }
             return IdSet.union(branches)
 

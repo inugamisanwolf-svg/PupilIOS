@@ -56,21 +56,20 @@ struct GalleryGrid: View {
     @ViewBuilder
     private var footer: some View {
         if let message = model.errorMessage {
-            VStack(alignment: .leading, spacing: theme.space(.sm)) {
-                Text(message)
-                    .font(theme.font(.caption))
-                    .foregroundColor(theme.danger)
-                    .fixedSize(horizontal: false, vertical: true)
+            AstryxCard {
+                VStack(alignment: .leading, spacing: theme.space(.sm)) {
+                    Text(message)
+                        .font(theme.font(.caption))
+                        .foregroundColor(theme.danger)
+                        .fixedSize(horizontal: false, vertical: true)
 
-                Button("再試行") {
-                    Task { await model.retry() }
+                    Button("再試行") {
+                        Task { await model.retry() }
+                    }
+                    .buttonStyle(.astryx)
                 }
-                .buttonStyle(.astryx)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .padding(theme.space(.md))
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(theme.surface)
-            .clipShape(RoundedRectangle(cornerRadius: theme.radiusMedium, style: .continuous))
             .padding(.horizontal, theme.space(.sm))
         } else if model.loading {
             HStack(spacing: theme.space(.sm)) {

@@ -1,6 +1,10 @@
 import Foundation
 import SwiftUI
 
+/// What the settings screen writes and the rest of the app reads.
+///
+/// `ObservableObject` rather than `@Observable`: the deployment target is iOS 16
+/// and the macro needs 17.
 @MainActor
 final class Settings: ObservableObject {
     static let shared = Settings()
@@ -15,6 +19,8 @@ final class Settings: ObservableObject {
     @Published var browseSort: String = SortMode.popularWeek.rawValue { didSet { persist() } }
 
     private init() {
+        // Read before the observers exist: assigning in init would otherwise
+        // write every key straight back.
         japaneseTitles = defaults.bool(forKey: "japaneseTitles")
         tagTranslation = defaults.string(forKey: "tagTranslation") ?? ""
         perPage = defaults.object(forKey: "perPage") as? Int ?? 24
@@ -42,6 +48,7 @@ final class Settings: ObservableObject {
 
     var sortMode: SortMode { SortMode(rawValue: browseSort) ?? .dateAdded }
 
+    /// The languages hitomi serves nozomi listings for.
     static let languages: [(id: String, label: String)] = [
         ("all", "すべて"),
         ("japanese", "日本語"),
@@ -51,6 +58,12 @@ final class Settings: ObservableObject {
     ]
 }
 
+/// Everything the reader owns rather than fetches: favourites, history, the read
+/// later list, favourite tags, past searches and page positions.
+///
+/// One JSON file per list under Application Support/Pupil, written on change.
+/// No ID list is long enough to be worth a database, and a half-written file
+/// only costs that one list.
 @MainActor
 final class Library: ObservableObject {
     static let shared = Library()
@@ -151,13 +164,30 @@ final class Library: ObservableObject {
 
     // MARK: - Search history
 
+    /// Stores a line the user submitted.
+    ///
+    /// The line is re-spelled through `QueryLanguage` first, so what is kept is
+    /// the one canonical form (`female:big_breasts`) that parses back into the
+    /// query that produced it -- not whatever case and spacing the keyboard
+    /// happened to produce.
     func addSearchHistory(_ text: String) {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-        if let index = searchHistory.firstIndex(of: trimmed) {
+        guard let stored = QueryLanguage.canonicalHistoryText(text) else { return }
+        remember(stored)
+    }
+
+    /// Stores a structured query. A query with no plain spelling (an OR group,
+    /// the favourite artists, the read later list) is not history material --
+    /// there would be no way to restore it -- so it is simply not stored.
+    func addSearchHistory(_ query: SearchQuery) {
+        guard let stored = QueryLanguage.text(of: query) else { return }
+        remember(stored)
+    }
+
+    private func remember(_ line: String) {
+        if let index = searchHistory.firstIndex(of: line) {
             searchHistory.remove(at: index)
         }
-        searchHistory.insert(trimmed, at: 0)
+        searchHistory.insert(line, at: 0)
         if searchHistory.count > 50 { searchHistory.removeLast(searchHistory.count - 50) }
         save(searchHistory, "searchHistory")
     }
@@ -175,6 +205,8 @@ final class Library: ObservableObject {
         progress["\(galleryID)"] = page
         save(progress, "progress")
     }
+
+    // MARK: - What a query may consult
 
     var searchContext: SearchContext {
         SearchContext(favoriteTags: favoriteTags, readLater: readLater)
