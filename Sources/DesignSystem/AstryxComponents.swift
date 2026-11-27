@@ -286,4 +286,22 @@ enum AstryxContrast {
         guard ui.getRed(&red, green: &green, blue: &blue, alpha: &alpha) else { return 0 }
         return 0.2126 * Double(red) + 0.7152 * Double(green) + 0.0722 * Double(blue)
     }
+
+    // MARK: hex（テーマプリセット生成用・MainActor 非依存）
+
+    /// accent の hex から、その上に載せる文字色の hex を返す。
+    /// 明るい accent には Astryx の `--color-on-accent`（#111111）、暗い accent には白。
+    static func readableHexForeground(on hex: String) -> String {
+        AstryxHex.luminance(hex) > 0.55 ? AstryxTokens.onAccent : "#FFFFFF"
+    }
+
+    /// 画像壁紙の上に敷く黒スクリムの不透明度（0〜0.35）。
+    /// テーマの背景が暗いほど濃くして、本文のコントラストを確保する。
+    static func scrimOpacity(forBackgroundHex hex: String) -> Double {
+        let luminance = AstryxHex.luminance(hex)
+        if luminance >= 0.5 {
+            return 0.10    // 明るいテーマは画像をほぼそのまま見せる
+        }
+        return min(0.35, max(0.18, 0.35 - luminance * 0.4))
+    }
 }

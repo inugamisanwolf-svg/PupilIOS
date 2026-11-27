@@ -50,6 +50,9 @@ final class GalleryListModel: ObservableObject {
     /// 取得に失敗したページの ID。次の試行でこの窓から取り直す
     /// （そのまま捨てると、失敗したページの ID が二度と出てこない）。
     private var pendingIDs: [Int] = []
+    /// ロード中に来た「もっと読みたい」要求。完了時に 1 ページだけ再生する
+    /// （セルの `onAppear` は高々 1 回しか来ないので、捨てると永久に止まる）。
+    private var wantsMore: Bool = false
 
     // MARK: - 状態
 
@@ -104,14 +107,38 @@ final class GalleryListModel: ObservableObject {
     }
 
     /// 無限スクロール。末尾から 6 件以内に入ったカードで次のページを要求する。
+    ///
+    /// **ロード中の要求を捨てない**: 初回ロードの直後は画面内の末尾セルが一斉に
+    /// `onAppear` する。その瞬間 `loading == true` なので素通しで捨てると、
+    /// そのセルは LazyVGrid に生かされたまま二度と `onAppear` せず、末尾しきい値に
+    /// 誰も到達しないまま 24 件で止まる（実機で出た症状）。要求は `wantsMore` に
+    /// 覚えておき、走っているロードの完了時に 1 回だけ再生する。
     func loadMoreIfNeeded(current: GalleryBlock?) async {
         guard let current = current else { return }
-        guard !loading, errorMessage == nil, hasMore, !blocks.isEmpty else { return }
+        guard !blocks.isEmpty, hasMore, errorMessage == nil else { return }
         guard let index = blocks.firstIndex(where: { $0.id == current.id }) else { return }
         let threshold = max(blocks.count - 6, 0)
-        if index >= threshold {
-            await loadNextPage()
+        guard index >= threshold else { return }
+        await requestMore()
+    }
+
+    /// グリッド末尾（＝画面下端が近づいた）から呼ぶ（`GalleryGrid`）。
+    /// セル側のしきい値（末尾 6 件）が取りこぼされた場合の保険。
+    func loadMoreIfNeededAtBottom() async {
+        guard hasMore, errorMessage == nil else { return }
+        // 1 枚も描画できていないうちは「下端」に意味がない（初回ロード中）。
+        // ここで要求すると起動直後に 2 ページ目まで自動で取りに行ってしまう。
+        guard !blocks.isEmpty else { return }
+        await requestMore()
+    }
+
+    /// 1 ページぶんの要求。走っているロードがあれば「終わったらもう 1 ページ」と覚える。
+    private func requestMore() async {
+        if loading {
+            wantsMore = true
+            return
         }
+        await loadPagesWhileWanted()
     }
 
     // MARK: - ページ読み込み
@@ -131,44 +158,70 @@ final class GalleryListModel: ObservableObject {
         errorMessage = nil
         loading = false
         hasMore = true
+        wantsMore = false
     }
 
     private func loadNextPage() async {
-        guard let current = source else { return }
-        guard !loading, hasMore else { return }
+        guard hasMore else { return }
+        if loading {
+            wantsMore = true
+            return
+        }
+        await loadPagesWhileWanted()
+    }
 
+    /// 取りこぼした要求を 1 ページずつ消化する。1 回の呼び出しで最大 4 ページ。
+    private func loadPagesWhileWanted() async {
+        guard let current = source else { return }
+
+        var rounds = 0
+        while rounds < 4 {
+            wantsMore = false
+            let progressed = await loadPageOnce(source: current)
+            rounds += 1
+
+            if !progressed { break }        // 失敗 / 0 件。エラー面か空状態が出る
+            if !wantsMore { break }         // 追加要求なし
+            if !hasMore { break }           // 末尾に到達
+        }
+        wantsMore = false
+    }
+
+    /// 1 ページだけ読む。進んだら true（＝もう 1 ページ読む価値がある）。
+    @discardableResult
+    private func loadPageOnce(source current: GalleryListSource) async -> Bool {
         let gen = generation
+        let beforeCount = blocks.count
+        let beforePage = pageCount
+
         loading = true
         errorMessage = nil
 
         do {
             let ids = try await idsForNextPage(source: current)
-            guard gen == generation else { return }
+            guard gen == generation else { return false }
 
             if ids.isEmpty {
                 hasMore = false
                 loading = false
-                return
+                return false
             }
 
             let fetched = await GalleryListModel.fetchBlocks(ids: ids)
-            guard gen == generation else { return }
+            guard gen == generation else { return false }
 
             if fetched.isEmpty {
                 // ID は取れたのにカードが 1 枚も作れなかった（404 / 429 /
                 // タイムアウト / 切断）。ここで id を捨てるとそのページが
                 // 永久に欠番になるので、次の試行に回して止める。
-                // 空のまま `pageCount` を進めると、末尾のカードが現れないので
-                // onAppear も発火せず、無言で止まったままになる。
                 pendingIDs = ids
                 errorMessage = "ギャラリー情報を取得できませんでした。通信状況を確認して再試行してください。"
                 loading = false
-                return
+                return false
             }
 
             // `ForEach(blocks)` / `LazyVGrid` の id は GalleryBlock.id なので、
             // 同じ ID が 2 枚入ると描画が壊れる（SwiftUI の id 重複）。
-            // 供給側で落とせない経路（検索結果の重複など）に備えてここでも弾く。
             let known = Set(blocks.map { $0.id })
             let fresh = fetched.filter { !known.contains($0.id) }
             if !fresh.isEmpty {
@@ -176,15 +229,18 @@ final class GalleryListModel: ObservableObject {
             }
             pageCount += 1
             loading = false
+
+            // 重複だけで 1 件も増えなくても、ページは 1 つ進んだ（＝続きはある）。
+            return blocks.count > beforeCount || pageCount > beforePage
         } catch {
-            guard gen == generation else { return }
+            guard gen == generation else { return false }
             loading = false
             if Task.isCancelled || GalleryListModel.isCancellation(error) {
                 // タブ移動 / 条件変更で `.task` がキャンセルされただけ。
-                // エラー面を出すと、戻ってきたときに一覧が「失敗」のまま残る。
-                return
+                return false
             }
             errorMessage = GalleryListModel.describe(error)
+            return false
         }
     }
 

@@ -17,6 +17,12 @@ final class Settings: ObservableObject {
     @Published var theme: String = "system" { didSet { persist() } }
     @Published var browseLanguage: String = "all" { didSet { persist() } }
     @Published var browseSort: String = SortMode.popularWeek.rawValue { didSet { persist() } }
+    /// リーダーの表示モード（`ReaderMode.rawValue`）とページの大きさ
+    /// （`ReaderFit.rawValue`）。生の文字列で持つのは、この層がリーダーの型を
+    /// 知らなくて済むようにするため。解釈は `ReaderLayout.swift` の
+    /// `Settings.readerModeValue` / `readerFitValue` が行う。
+    @Published var readerMode: String = "paged" { didSet { persist() } }
+    @Published var readerFit: String = "fitScreen" { didSet { persist() } }
 
     private init() {
         // Read before the observers exist: assigning in init would otherwise
@@ -27,6 +33,8 @@ final class Settings: ObservableObject {
         theme = defaults.string(forKey: "theme") ?? "system"
         browseLanguage = defaults.string(forKey: "browseLanguage") ?? "all"
         browseSort = defaults.string(forKey: "browseSort") ?? SortMode.popularWeek.rawValue
+        readerMode = defaults.string(forKey: "readerMode") ?? "paged"
+        readerFit = defaults.string(forKey: "readerFit") ?? "fitScreen"
     }
 
     private func persist() {
@@ -36,6 +44,8 @@ final class Settings: ObservableObject {
         defaults.set(theme, forKey: "theme")
         defaults.set(browseLanguage, forKey: "browseLanguage")
         defaults.set(browseSort, forKey: "browseSort")
+        defaults.set(readerMode, forKey: "readerMode")
+        defaults.set(readerFit, forKey: "readerFit")
     }
 
     var colorScheme: ColorScheme? {

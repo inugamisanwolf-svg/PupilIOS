@@ -93,6 +93,38 @@ struct SettingsView: View {
 
                 Section {
                     Group {
+                        Picker("表示モード", selection: $settings.readerMode) {
+                            ForEach(ReaderMode.allCases, id: \.self) { item in
+                                Text(item.label).tag(item.rawValue)
+                            }
+                        }
+
+                        Picker("ページの大きさ", selection: $settings.readerFit) {
+                            ForEach(ReaderFit.allCases, id: \.self) { item in
+                                Text(item.label).tag(item.rawValue)
+                            }
+                        }
+                    }
+                    .listRowBackground(theme.surface)
+                } header: {
+                    sectionHeader("リーダー")
+                }
+
+                Section {
+                    Group {
+                        NavigationLink {
+                            ThemeEditorView()
+                        } label: {
+                            Label("テーマと壁紙", systemImage: "paintpalette")
+                        }
+                    }
+                    .listRowBackground(theme.surface)
+                } header: {
+                    sectionHeader("テーマと壁紙")
+                }
+
+                Section {
+                    Group {
                         NavigationLink {
                             AstryxSettingsSurface(settings: settings)
                         } label: {

@@ -181,7 +181,135 @@ npm run build          # -> ../Resources/astryx/astryx.js / astryx.css
 
 ---
 
-## 7. ライセンス
+## 7. テーマ / 壁紙の拡張（v1.0.4）
+
+ユーザーがテーマ色を個別に編集し、壁紙（プリセット / 写真）を設定できるようにした。実装は `Sources/DesignSystem/` の 4 ファイル。
+
+| ファイル | 役割 |
+|---|---|
+| `ThemeStore.swift` | 永続化（UserDefaults + Application Support）、`ThemeColorKey` / `Wallpaper` / `ThemePalette`、壁紙ファイル管理 |
+| `ThemePresets.swift` | テーマ 5 プリセット・壁紙 5 プリセットの実値 |
+| `WallpaperView.swift` | 壁紙レイヤ（グラデ / 画像 + スクリム） |
+| `ThemeEditorView.swift` | 編集画面（`NavigationLink` の行き先） |
+
+`AstryxTheme` は**パレットから都度構築する computed プロパティ**に変わった:
+
+```swift
+static var shared: AstryxTheme { AstryxTheme(palette: ThemeStore.shared.palette) }
+```
+
+呼び出し側（`AstryxTheme.shared.accent` 等）は無変更。`ThemeStore` にも `AstryxTheme` にも `@MainActor` は付けていない — `AstryxTheme.shared` は既定引数や computed property から非隔離文脈で読まれるため（変更系メソッドはメインスレッド前提、DEBUG では `dispatchPrecondition` で検証）。
+
+### 7.1 パレット 9 キー ↔ Astryx トークン
+
+| `ThemeColorKey` | `AstryxTheme` | 元の CSS custom property |
+|---|---|---|
+| `accent` | `accent` | `--color-accent` |
+| `onAccent` | `onAccent` | `--color-on-accent` |
+| `background` | `background`（および `card`） | `--color-background-body` / `--color-background-card` |
+| `surface` | `surface` | `--color-background-surface` |
+| `surfaceRaised` | `surfaceRaised` | `--color-background-gray` |
+| `textPrimary` | `textPrimary` | `--color-text-primary` |
+| `textSecondary` | `textSecondary` | `--color-text-secondary` |
+| `border` | `border` | `--color-border`（下記の alpha 変換） |
+| `danger` | `danger` | `--color-error` |
+
+`card` は `background` と同値にしている（Astryx neutral dark の `--color-background-card == --color-background-body` に合わせる）。**壁紙の上ではカードが不透明パネルとして働く**ので、可読性はこれで担保される。
+
+**`border` の alpha 変換**: Astryx の `--color-border` は `#FFFFFF` + alpha `0x1A`（≈10.2%）。パレットは不透明 `#RRGGBB` なので、描画時に不透明度を掛け直す:
+
+```swift
+static func borderOpacity(forHex hex: String) -> Double {
+    AstryxHex.luminance(hex) < 0.10 ? 0.30 : 0.12   // ほぼ黒い境界色は 12% では見えないので持ち上げる
+}
+```
+
+### 7.2 テーマプリセット実値
+
+`.astryx` は Astryx neutral dark の実値そのまま。他 4 つは Lead 指定の 4 色から残りを**決定的な式**で導出する。
+
+| プリセット | `accent` | `background` | `surface` | `textPrimary` |
+|---|---|---|---|---|
+| `astryx` | `#F1F1F1` | `#1B1B1B` | `#262626` | `#FFFFFF` |
+| `midnight` | `#5AA9FF` | `#0B0F14` | `#141A21` | `#FFFFFF` |
+| `pink` | `#FF5C9A` | `#141013` | `#1F181C` | `#FFFFFF` |
+| `purple` | `#A67CFF` | `#12101A` | `#1C1826` | `#FFFFFF` |
+| `tiffany` | `#0ABAB5` | `#0E1414` | `#16201F` | `#FFFFFF` |
+
+導出規則（`ThemePresetPalettes.derived`）:
+
+| キー | 式 | `pink` の結果 |
+|---|---|---|
+| `onAccent` | accent の相対輝度 > 0.55 なら `#111111`（= `--color-on-accent`）、else `#FFFFFF` | `#FFFFFF` |
+| `surfaceRaised` | `mix(surface, #FFFFFF, 6%)` | `#2C262A` |
+| `textSecondary` | `mix(textPrimary, background, 42%)` | `#9E9A9C` |
+| `border` | `#FFFFFF`（描画時 alpha 0.12） | `#FFFFFF` |
+| `danger` | `#FF705D`（Astryx `--color-error` dark） | `#FF705D` |
+
+`astryx` だけは全キーが `AstryxTokens` の実値（`surfaceRaised = #303030`, `textSecondary = #9E9E9E`, `onAccent = #111111`）。`.astryx` に対して上記の式を適用しても同じ値になることは確認済み。
+
+### 7.3 壁紙プリセット実値
+
+`Wallpaper.presetID` は `WallpaperPreset.rawValue`。斜め（左上→右下）グラデーション + 右上に薄いアクセント光。
+
+| ID | ラベル | 開始色 | 終了色 | 光 |
+|---|---|---|---|---|
+| `paper` | ペーパー | `#101013` | `#1C1C21` | なし |
+| `midnight` | ミッドナイト | `#05070C` | `#12203A` | `#5AA9FF` |
+| `pink` | ピンク | `#12060B` | `#2A0C18` | `#FF5C9A` |
+| `purple` | ムラサキ | `#0D0817` | `#1E1230` | `#A67CFF` |
+| `tiffany` | Tiffany Blue | `#04100F` | `#0C201E` | `#0ABAB5` |
+
+各テーマプリセットの既定壁紙: `astryx` → なし / `midnight` → `midnight` / `pink` → `pink` / `purple` → `purple` / `tiffany` → `tiffany`（`ThemePreset.defaultWallpaper`）。
+
+### 7.4 描画とスクリム
+
+`WallpaperView(palette:)` は Root の最背面に敷く（既定で `.ignoresSafeArea()`）。レイヤ構成:
+
+1. `base` — `.image` なら写真を `scaledToFill`、`.preset` ならグラデーション、`.none` なら `palette.background` べた
+2. `scrim` — **画像のときだけ** `Color.black` を重ねる。不透明度は `0〜0.35`:
+
+```swift
+static func scrimOpacity(forBackgroundHex hex: String) -> Double {
+    let luminance = AstryxHex.luminance(hex)
+    if luminance >= 0.5 { return 0.10 }                       // 明るいテーマは画像を活かす
+    return min(0.35, max(0.18, 0.35 - luminance * 0.4))       // 暗いテーマほど濃く
+}
+```
+
+プリセット壁紙は元から低輝度に設計しているのでスクリムは敷かない（敷くとほぼ黒になる）。サムネイル用途は `init(palette:fillsSafeArea: false)` で親サイズに収める。
+
+### 7.5 永続化
+
+| 対象 | 場所 |
+|---|---|
+| パレット | `UserDefaults["theme.palette.v1"]`（`ThemePalette` の JSON） |
+| 戻り先プリセット | `UserDefaults["theme.basePreset.v1"]`（`ThemePreset.rawValue`） |
+| 壁紙画像 | `Application Support/Wallpaper/wallpaper-<UUID>.jpg` |
+
+- 取り込み時は**長辺 2400px に縮小**して JPEG（quality 0.92、失敗時 PNG）で保存。`Wallpaper.fileName` に持つ。
+- 差し替え・「なし」へ変更時は**旧ファイルを削除**。取り込み後は `removeOrphans(keeping:)` で孤立ファイルも掃除。
+- 起動時にファイルが消えていたら壁紙を「なし」に落とす。
+- `revision` は変更のたびに +1。Root が `.id(ThemeStore.shared.revision)` で TabView を再構築する。
+
+### 7.6 編集画面（`ThemeEditorView`）
+
+`NavigationLink { ThemeEditorView() }` で開く。上から: プレビュー（実寸の壁紙 + カード + サンプルボタン）/ プリセット 5 チップ（横スクロール、選択中は枠）/ 色 9 行（スウォッチ + ラベル + `#RRGGBB` + `ColorPicker`）/ 壁紙（なし + 5 プリセット + 現在の写真 + `PhotosPicker`）/ プリセットに戻す。
+
+- `ColorPicker` の値は `AstryxHex.color(_:)` と `AstryxHex.string(from:)` で `#RRGGBB` に往復変換して `ThemeStore.setHex` に渡す。
+- `PhotosPicker` は iOS 16 の out-of-process ピッカーなので**写真ライブラリの権限ダイアログは出ない**（`NSPhotoLibraryUsageDescription` も不要）。
+- `setHex(.accent)` では `onAccent` がコントラストを保つよう自動追従する（ユーザーが `onAccent` を明示編集するまでは）。
+- 「プリセットに戻す」は直前のプリセットへ戻す（色を編集して `activePreset == nil` になっても戻り先を失わない）。
+
+### 7.7 未対応・リスク
+
+1. **iOS 16.0 実機での見た目は未検証**（ローカルに swiftc が無い。型は机上検証のみ）。
+2. `AstryxTheme.colorScheme` は常に `.dark`。明るい背景色を選んでもシステム側（キーボード・スクロールバー等）はダークのまま。
+3. `border` の alpha 変換は近似（`--color-border` の `0x1A` を 0.12 として再現）。厳密一致ではない。
+4. 壁紙画像は JPEG 再エンコードで保存するため、透過 PNG は不透明化される（壁紙用途では問題なしと判断）。
+5. `ThemePreset` の 4 プリセットの `surfaceRaised` / `textSecondary` は導出値。Lead 指定の 4 色以外は「決定的だがデザイン検証はしていない」値。
+
+## 8. ライセンス
 
 | 対象 | ライセンス |
 |---|---|

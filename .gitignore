@@ -40,3 +40,7 @@ desktop.ini
 ci-logs/
 ci-run/
 *.log
+
+# agent scratch (not shipped)
+Sources/**/_*.py
+_probe/*.txt

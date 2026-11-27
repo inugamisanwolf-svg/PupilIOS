@@ -132,7 +132,88 @@ final class ImageCache {
 
 他の担当のファイルは**編集しない**。必要なら Lead に依頼する。`docs/CONTRACT.md`（このファイル）は Lead のみ編集。
 
-## 2. 画面要件（Pupil の機能パリティ）
+## 1.5 テーマ / リーダー拡張（v1.0.4 で追加・凍結）
+
+```swift
+// Sources/DesignSystem/ThemeStore.swift  (astryx-design 所有)
+enum ThemeColorKey: String, CaseIterable, Codable {
+    case accent, onAccent, background, surface, surfaceRaised, textPrimary, textSecondary, border, danger
+    var label: String   // 日本語ラベル
+}
+
+enum WallpaperKind: String, Codable { case none, preset, image }
+
+struct Wallpaper: Codable, Equatable {
+    var kind: WallpaperKind
+    var presetID: String     // "midnight" / "pink" / "purple" / "tiffany" / "paper"
+    var fileName: String     // kind == .image のとき Application Support/Wallpaper/ 内のファイル名
+}
+
+struct ThemePalette: Codable, Equatable {
+    var accent: String            // "#RRGGBB"
+    var onAccent: String
+    var background: String
+    var surface: String
+    var surfaceRaised: String
+    var textPrimary: String
+    var textSecondary: String
+    var border: String            // "#RRGGBB"（不透明でよい。内部で alpha 0.10 相当を再現）
+    var danger: String
+    var wallpaper: Wallpaper
+    subscript(_ key: ThemeColorKey) -> String { get set }
+}
+
+enum ThemePreset: String, CaseIterable, Codable {
+    case astryx, midnight, pink, purple, tiffany
+    var label: String                       // "Astryx" / "ミッドナイト" / "ピンク" / "ムラサキ" / "Tiffany Blue"
+    var palette: ThemePalette { get }
+}
+
+@MainActor を付けない理由: `AstryxTheme.shared` は computed で `ThemeStore.shared.palette` を読み、既存コードには
+`AstryxTheme.shared.accent` を非隔離文脈から触る箇所（既定引数・`private var theme`）があるため。
+変更系メソッドは MainActor から呼ばれる前提でよい。
+
+final class ThemeStore: ObservableObject {
+    static let shared: ThemeStore
+    @Published private(set) var palette: ThemePalette
+    @Published private(set) var revision: Int            // 変更のたび +1（画面再構築のトリガ）
+    @Published private(set) var activePreset: ThemePreset?
+    func apply(_ preset: ThemePreset)
+    func setHex(_ hex: String, for key: ThemeColorKey)   // プリセットから外れる（activePreset = nil）
+    func resetToPreset()
+    func setWallpaper(_ wallpaper: Wallpaper)
+    func importWallpaper(data: Data) -> Bool             // 画像を取り込み Wallpaper.image に設定
+    func wallpaperImage() -> UIImage?                    // kind == .image のとき読み込み
+}
+
+// 壁紙レイヤ（Root の最背面に敷く）
+struct WallpaperView: View { init(palette: ThemePalette) }
+
+// テーマ編集画面（設定から NavigationLink で開く）
+struct ThemeEditorView: View { init() }
+```
+
+`AstryxTheme.shared` は **`static var`（computed）** に変更し、`ThemeStore.shared.palette` から都度構築する。
+**呼び出し側（`AstryxTheme.shared.accent` など既存の書き方）は変更不要**。
+テーマ変更を全画面へ反映するのは Root 側の責務: `RootView` が `.id(ThemeStore.shared.revision)` を TabView に付けて再構築する。
+
+### リーダー拡張（ui-reader 所有）
+
+```swift
+enum ReaderMode: String, CaseIterable, Codable { case paged, vertical }   // paged=現行 / vertical=縦スクロール（webtoon）
+enum ReaderFit: String, CaseIterable, Codable {
+    case fitScreen   // 画面に合わせる（aspect fit）
+    case fitWidth    // 横幅に合わせる
+    case fitHeight   // 高さに合わせる
+    case original    // 原寸（100%）
+    var label: String
+}
+// Settings に追加（既存の didSet 永続化パターンに従う）
+//   var readerMode: String   // ReaderMode.rawValue
+//   var readerFit: String    // ReaderFit.rawValue
+```
+
+
 
 1. **Root**: `TabView` 5タブ = ブラウズ / 検索 / お気に入り / 履歴 / 設定。各タブ `NavigationStack`。
    環境オブジェクト `Settings.shared` / `Library.shared` を注入（App 側で `.environmentObject`）。

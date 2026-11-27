@@ -22,6 +22,9 @@ import UIKit
 /// zoom" never depends on the page-turn decision.
 struct ZoomablePageView: UIViewRepresentable {
     let url: URL
+    /// 最初に見せる大きさ。`minimumZoomScale`（＝画面に合わせた状態）は動かさない
+    /// ので、fitWidth などで開いてもピンチで 1.0 まで戻せばページ送りが効く。
+    let fit: ReaderFit
     let onTap: () -> Void
 
     func makeCoordinator() -> Coordinator {
@@ -30,6 +33,7 @@ struct ZoomablePageView: UIViewRepresentable {
 
     func makeUIView(context: Context) -> ZoomScrollView {
         let view = ZoomScrollView()
+        view.imageFit = fit
         view.tapHandler = { [weak coordinator = context.coordinator] in
             coordinator?.tap()
         }
@@ -43,6 +47,12 @@ struct ZoomablePageView: UIViewRepresentable {
             coordinator?.tap()
         }
         context.coordinator.onTap = onTap
+
+        if uiView.imageFit != fit {
+            uiView.imageFit = fit
+            uiView.applyCurrentFit()
+        }
+
         context.coordinator.attach(view: uiView, url: url)
     }
 
@@ -109,11 +119,16 @@ struct ZoomablePageView: UIViewRepresentable {
 final class ZoomScrollView: UIScrollView, UIScrollViewDelegate {
     var tapHandler: (() -> Void)?
 
+    /// 最初に見せる大きさ。画像が届いた時点で倍率として適用する。
+    var imageFit: ReaderFit = .fitScreen
+
     private let imageView = UIImageView()
     private let spinner = UIActivityIndicatorView(style: .large)
     private let messageLabel = UILabel()
 
     private let doubleTapZoom: CGFloat = 2.5
+    /// 通常の上限。`original` のようにこれを超える倍率が要る場合は、画像が届いた
+    /// 時点で `applyInitialZoom` が上限だけ引き上げる（下限は 1 のまま）。
     private let maximumZoom: CGFloat = 4
 
     /// True while a pinch is running or a zoomed page is settling.
@@ -123,6 +138,10 @@ final class ZoomScrollView: UIScrollView, UIScrollViewDelegate {
     /// during the deceleration that follows). Keeping our own flag under a
     /// different name means the two can never be confused.
     private var isUserZooming = false
+
+    /// 画像が届いたとき bounds がまだ 0 で、fit の倍率を適用できなかった。
+    /// 次のレイアウトで 1 回だけやり直す。
+    private var pendingFitApplication = false
 
     /// True when the page is showing at its fitted size, so nothing is off screen
     /// to pan to.
@@ -237,6 +256,7 @@ final class ZoomScrollView: UIScrollView, UIScrollViewDelegate {
         // プログラムからの `setZoomScale` が `willBeginZooming` だけ呼んで
         // `didEndZooming` を呼ばない経路があっても、フラグは必ず戻す。
         isUserZooming = false
+        pendingFitApplication = false
         setZoomScale(minimumZoomScale, animated: false)
         contentOffset = .zero
         contentInset = .zero
@@ -263,6 +283,7 @@ final class ZoomScrollView: UIScrollView, UIScrollViewDelegate {
         updatePanAvailability()
         setNeedsLayout()
         layoutIfNeeded()
+        applyInitialZoom()
     }
 
     /// 取得済みのページを、スピナーを出さずにそのまま置く。
@@ -275,6 +296,48 @@ final class ZoomScrollView: UIScrollView, UIScrollViewDelegate {
         updatePanAvailability()
         setNeedsLayout()
         layoutIfNeeded()
+        applyInitialZoom()
+    }
+
+    /// 設定の「大きさ」が変わったときに、今の画像へ適用し直す。
+    func applyCurrentFit() {
+        layoutIfNeeded()
+        applyInitialZoom()
+    }
+
+    /// 画像と枠が揃った時点で、`imageFit` の倍率へ寄せる。
+    ///
+    /// ここで上げるのは `zoomScale` だけで、`minimumZoomScale` は 1（画面に
+    /// 合わせた状態）のままにしてある。だから fitWidth などで開いても、ピンチで
+    /// 1.0 まで戻せばページ送りのスワイプが効く状態に必ず戻れる。
+    private func applyInitialZoom() {
+        guard let image = imageView.image else { return }
+
+        let box = bounds.size
+        guard box.width > 1, box.height > 1 else {
+            // まだレイアウトされていない（bounds が 0）。このまま諦めると
+            // fitWidth で開いても画面に合わせた倍率のままになるので、
+            // 次のレイアウトでやり直す。
+            pendingFitApplication = true
+            return
+        }
+
+        pendingFitApplication = false
+
+        let target = imageFit.initialZoomScale(for: image.size, in: box)
+
+        // 上限は target を下回らないように広げる（原寸が 4 倍を超える画像がある）。
+        let ceiling = max(maximumZoom, target)
+        if abs(maximumZoomScale - ceiling) > 0.001 {
+            maximumZoomScale = ceiling
+        }
+
+        let clamped = min(max(target, minimumZoomScale), maximumZoomScale)
+        if abs(zoomScale - clamped) > 0.001 {
+            setZoomScale(clamped, animated: false)
+        }
+
+        updatePanAvailability()
     }
 
     func resetToPlaceholder() {
@@ -335,6 +398,12 @@ final class ZoomScrollView: UIScrollView, UIScrollViewDelegate {
         )
         if contentInset != insets {
             contentInset = insets
+        }
+
+        // 画像が届いた時点でレイアウトが済んでいなかったページの fit を、
+        // ここで 1 回だけ適用する（適用後はフラグが落ちるのでループしない）。
+        if pendingFitApplication {
+            applyInitialZoom()
         }
 
         updatePanAvailability()

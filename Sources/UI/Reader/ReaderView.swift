@@ -26,6 +26,14 @@ struct ReaderView: View {
     @State private var chromeVisible: Bool = true
     @State private var chromeToken: Int = 0
     @State private var prefetchTask: Task<Void, Never>?
+    /// 縦スクロールの読了位置書き込み。指が止まって 0.5 秒してから書く
+    /// （スクロール中に毎フレーム `Library.setPage` を叩かない）。
+    @State private var progressTask: Task<Void, Never>?
+    @State private var pendingProgress: Int = -1
+    /// スライダーから飛んだとき、縦スクロール側に「ここへ送れ」と伝える。
+    @State private var scrollRequest: Int?
+
+    private let verticalSpace = "pupil.reader.vertical"
 
     init(galleryID: Int, startPage: Int) {
         self.galleryID = galleryID
@@ -61,10 +69,14 @@ struct ReaderView: View {
                     pageCount: pageURLs.count,
                     isFavorite: library.isFavorite(galleryID),
                     isInReadLater: library.isInReadLater(galleryID),
+                    mode: settings.readerModeValue,
+                    fit: settings.readerFitValue,
                     onClose: { close() },
                     onSelectPage: { page in show(page: page) },
                     onToggleFavorite: { library.toggleFavorite(galleryID) },
-                    onToggleReadLater: { library.toggleReadLater(galleryID) }
+                    onToggleReadLater: { library.toggleReadLater(galleryID) },
+                    onSelectMode: { mode in settings.readerMode = mode.rawValue },
+                    onSelectFit: { fit in settings.readerFit = fit.rawValue }
                 )
                 .transition(.opacity)
             }
@@ -76,10 +88,19 @@ struct ReaderView: View {
         .task(id: chromeToken) { await hideChromeLater() }
         .onChange(of: currentIndex) { newValue in
             guard isReady else { return }
-            library.setPage(newValue, for: galleryID)
             prefetch(around: newValue)
+
+            if settings.readerModeValue == .vertical {
+                // 縦スクロールは指を止めている間も index が動き続けるので、
+                // 落ち着いてから書く。
+                scheduleProgressWrite(newValue)
+            } else {
+                library.setPage(newValue, for: galleryID)
+            }
         }
         .onDisappear {
+            progressTask?.cancel()
+            progressTask = nil
             saveProgress()
             prefetchTask?.cancel()
             prefetchTask = nil
@@ -151,14 +172,25 @@ struct ReaderView: View {
         .padding(theme.space(.lg))
     }
 
+    @ViewBuilder
     private var pages: some View {
+        if settings.readerModeValue == .vertical {
+            verticalPages
+        } else {
+            pagedPages
+        }
+    }
+
+    // MARK: - ページ送り
+
+    private var pagedPages: some View {
         TabView(selection: $currentIndex) {
             ForEach(pageURLs.indices, id: \.self) { index in
                 ZStack {
                     theme.background
 
                     if let url = pageURLs[index] {
-                        ZoomablePageView(url: url) {
+                        ZoomablePageView(url: url, fit: settings.readerFitValue) {
                             toggleChrome()
                         }
                     } else {
@@ -176,6 +208,130 @@ struct ReaderView: View {
         .ignoresSafeArea()
     }
 
+    // MARK: - 縦スクロール
+
+    /// ページを縦に連続して並べる（webtoon）。
+    ///
+    /// `LazyVStack` なので画面外のページは作られない。読了位置は「いちばん
+    /// 画面に映っているページ」を各ページの frame から拾って決め、書き込みだけを
+    /// 0.5 秒デバウンスする（スクロール中にディスクを叩き続けない）。
+    private var verticalPages: some View {
+        GeometryReader { outer in
+            ScrollViewReader { proxy in
+                ScrollView(.vertical, showsIndicators: false) {
+                    LazyVStack(spacing: 0) {
+                        ForEach(pageURLs.indices, id: \.self) { index in
+                            verticalPage(index: index, viewport: outer.size)
+                                .id(index)
+                                .background(verticalFrameReader(index: index))
+                        }
+                    }
+                }
+                .coordinateSpace(name: verticalSpace)
+                .onPreferenceChange(VisiblePageFrames.self) { frames in
+                    updateVisiblePage(frames: frames, viewportHeight: outer.size.height)
+                }
+                .onAppear {
+                    // 開いた瞬間は `LazyVStack` の行がまだ揃っていないので、
+                    // 1 フレーム待ってから送る。
+                    let target = currentIndex
+                    Task { @MainActor in
+                        await Task.yield()
+                        proxy.scrollTo(target, anchor: .top)
+                    }
+                }
+                .onChange(of: scrollRequest) { request in
+                    guard let target = request else { return }
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        proxy.scrollTo(target, anchor: .top)
+                    }
+                    scrollRequest = nil
+                }
+            }
+        }
+        .ignoresSafeArea()
+    }
+
+    @ViewBuilder
+    private func verticalPage(index: Int, viewport: CGSize) -> some View {
+        let size = verticalPageSize(index: index, viewport: viewport)
+
+        if pageURLs.indices.contains(index), let url = pageURLs[index] {
+            VerticalPageView(
+                url: url,
+                size: size,
+                onTap: { toggleChrome() },
+                onDoubleTap: { settings.readerFit = settings.readerFitValue.next.rawValue }
+            )
+        } else {
+            ZStack {
+                theme.background
+
+                Text("このページは読み込めませんでした")
+                    .font(theme.font(.caption))
+                    .foregroundColor(theme.textSecondary)
+                    .multilineTextAlignment(.center)
+                    .padding(theme.space(.lg))
+            }
+            .frame(width: max(size.width, 1), height: max(size.height, 1))
+        }
+    }
+
+    /// ページの枠は画像の実寸（`GalleryFiles`）から決める。画像を読み込む前でも
+    /// 高さが確定するので、スクロール中に行の高さが跳ねない。
+    private func verticalPageSize(index: Int, viewport: CGSize) -> CGSize {
+        let files = gallery?.info.fileList ?? []
+
+        guard files.indices.contains(index), viewport.width > 1, viewport.height > 1 else {
+            let width = max(viewport.width, 1)
+            return CGSize(width: width, height: width * 1.4)
+        }
+
+        let file = files[index]
+        let image = CGSize(width: CGFloat(max(file.width, 1)), height: CGFloat(max(file.height, 1)))
+        var size = settings.readerFitValue.pageSize(for: image, in: viewport)
+
+        // 縦スクロールは横に動かせない。`original` や `fitHeight` で画面幅を超える
+        // ページは、横が切れて読めなくなるので幅に合わせて縮める。
+        if size.width > viewport.width, size.width > 0 {
+            let scale = viewport.width / size.width
+            size = CGSize(width: viewport.width, height: max(size.height * scale, 1))
+        }
+
+        return size
+    }
+
+    private func verticalFrameReader(index: Int) -> some View {
+        GeometryReader { proxy in
+            Color.clear.preference(
+                key: VisiblePageFrames.self,
+                value: [index: proxy.frame(in: .named(verticalSpace))]
+            )
+        }
+    }
+
+    /// いちばん画面に映っているページを読了位置にする。
+    private func updateVisiblePage(frames: [Int: CGRect], viewportHeight: CGFloat) {
+        guard isReady, settings.readerModeValue == .vertical, viewportHeight > 1, !frames.isEmpty else { return }
+
+        // 横は画面幅いっぱいなので、縦の重なりだけで決めれば足りる。
+        let viewport = CGRect(x: 0, y: 0, width: 1_000_000, height: viewportHeight)
+
+        var best = currentIndex
+        var bestOverlap: CGFloat = 0
+
+        for (index, frame) in frames {
+            let overlap = frame.intersection(viewport).height
+            if overlap > bestOverlap {
+                bestOverlap = overlap
+                best = index
+            }
+        }
+
+        guard bestOverlap > 0, best != currentIndex, pageURLs.indices.contains(best) else { return }
+        currentIndex = best
+    }
+
     // MARK: - Loading
 
     @MainActor
@@ -191,16 +347,22 @@ struct ReaderView: View {
         do {
             let loaded = try await HitomiClient.shared.gallery(galleryID)
 
-            var urls: [URL?] = []
-            urls.reserveCapacity(loaded.info.fileList.count)
+            let files = loaded.info.fileList
 
-            for file in loaded.info.fileList {
-                urls.append(try? await HitomiClient.shared.pageURL(galleryID, image: file))
-                resolvedCount = urls.count
-            }
+            // 全ページ分を 1 ホップで。`pageURL` を 1 枚ずつ await すると、
+            // ページ数の多い作品で 2000 回 actor を往復することになる。
+            let urls = await HitomiClient.shared.pageURLs(galleryID, files: files, limit: files.count)
+            resolvedCount = urls.count
 
             guard !urls.isEmpty else {
                 phase = .failed("このギャラリーにはページがありません")
+                return
+            }
+
+            // `gg.js` が落ちていると全ページ nil で返る。1 枚ずつ「読めません」と
+            // 並べるより、リーダーごと再試行できる画面を出す。
+            guard urls.contains(where: { $0 != nil }) else {
+                phase = .failed("ページの URL を解決できませんでした")
                 return
             }
 
@@ -276,6 +438,25 @@ struct ReaderView: View {
 
         // 保存と先読みは `onChange(of: currentIndex)` がまとめて行う。
         currentIndex = index
+
+        // 縦スクロールは自分で送らないと index と表示位置がずれる。
+        if settings.readerModeValue == .vertical {
+            scrollRequest = index
+        }
+    }
+
+    /// 縦スクロールの読了位置。指が止まって 0.5 秒してから 1 回だけ書く。
+    private func scheduleProgressWrite(_ index: Int) {
+        pendingProgress = index
+        progressTask?.cancel()
+
+        progressTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            if Task.isCancelled { return }
+            if pendingProgress == index {
+                library.setPage(index, for: galleryID)
+            }
+        }
     }
 
     private func saveProgress() {
@@ -286,5 +467,15 @@ struct ReaderView: View {
     private func close() {
         saveProgress()
         dismiss()
+    }
+}
+
+/// 縦スクロールで、各ページがスクロール座標系のどこに居るかを集める。
+/// 読了位置（いちばん画面に映っているページ）を出すためだけに使う。
+private struct VisiblePageFrames: PreferenceKey {
+    static var defaultValue: [Int: CGRect] { [:] }
+
+    static func reduce(value: inout [Int: CGRect], nextValue: () -> [Int: CGRect]) {
+        value.merge(nextValue()) { _, new in new }
     }
 }

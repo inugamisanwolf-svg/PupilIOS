@@ -15,11 +15,15 @@ struct ReaderOverlay: View {
     let pageCount: Int
     let isFavorite: Bool
     let isInReadLater: Bool
+    let mode: ReaderMode
+    let fit: ReaderFit
     let onClose: () -> Void
     /// 1 始まりのページ番号。
     let onSelectPage: (Int) -> Void
     let onToggleFavorite: () -> Void
     let onToggleReadLater: () -> Void
+    let onSelectMode: (ReaderMode) -> Void
+    let onSelectFit: (ReaderFit) -> Void
 
     @State private var draggingPage: Double?
 
@@ -81,6 +85,9 @@ struct ReaderOverlay: View {
 
                 Spacer(minLength: 0)
 
+                modeMenu
+                fitMenu
+
                 barButton(
                     systemImage: isInReadLater ? "bookmark.fill" : "bookmark",
                     label: "後で読む",
@@ -124,6 +131,49 @@ struct ReaderOverlay: View {
         Rectangle()
             .fill(.ultraThinMaterial)
             .ignoresSafeArea()
+    }
+
+    // MARK: - 表示モード / 大きさ
+
+    private var modeMenu: some View {
+        Menu {
+            Picker("表示モード", selection: Binding(
+                get: { mode },
+                set: { onSelectMode($0) }
+            )) {
+                ForEach(ReaderMode.allCases, id: \.self) { item in
+                    Text(item.label).tag(item)
+                }
+            }
+        } label: {
+            menuLabel(mode.symbolName)
+        }
+        .foregroundColor(theme.textPrimary)
+        .accessibilityLabel("表示モード")
+    }
+
+    private var fitMenu: some View {
+        Menu {
+            Picker("ページの大きさ", selection: Binding(
+                get: { fit },
+                set: { onSelectFit($0) }
+            )) {
+                ForEach(ReaderFit.allCases, id: \.self) { item in
+                    Text(item.label).tag(item)
+                }
+            }
+        } label: {
+            menuLabel(fit.symbolName)
+        }
+        .foregroundColor(theme.textPrimary)
+        .accessibilityLabel("ページの大きさ")
+    }
+
+    private func menuLabel(_ systemImage: String) -> some View {
+        Image(systemName: systemImage)
+            .font(.system(size: 17, weight: .medium))
+            .frame(width: 40, height: 40)
+            .contentShape(Rectangle())
     }
 
     private var pageBinding: Binding<Double> {
