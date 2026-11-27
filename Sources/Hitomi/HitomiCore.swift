@@ -157,7 +157,7 @@ struct FlexibleString: Decodable {
 /// Reads one key as text, tolerating a missing key, a null, or any scalar type.
 func flexString<K: CodingKey>(_ container: KeyedDecodingContainer<K>, _ key: K) -> String? {
     guard let wrapped = try? container.decodeIfPresent(FlexibleString.self, forKey: key) else { return nil }
-    return wrapped?.value
+    return wrapped.value
 }
 
 func flexInt<K: CodingKey>(_ container: KeyedDecodingContainer<K>, _ key: K) -> Int? {
@@ -165,12 +165,4 @@ func flexInt<K: CodingKey>(_ container: KeyedDecodingContainer<K>, _ key: K) -> 
     if let value = Int(text) { return value }
     if let value = Double(text) { return Int(value) }
     return nil
-}
-
-func flexBoolFlag<K: CodingKey>(_ container: KeyedDecodingContainer<K>, _ key: K) -> Bool {
-    guard let text = flexString(container, key) else { return false }
-    let trimmed = text.trimmingCharacters(in: .whitespaces)
-    if trimmed.isEmpty { return false }
-    if trimmed == "0" || trimmed.lowercased() == "false" { return false }
-    return true
 }

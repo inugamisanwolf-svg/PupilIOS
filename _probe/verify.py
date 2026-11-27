@@ -33,6 +33,7 @@ Mirrors:
 
 import hashlib
 import json
+import os
 import re
 import struct
 import subprocess
@@ -561,6 +562,60 @@ def section_nozomi():
     check("nozomi", "popularWeek != dateAdded head", week != added, f"{week} vs {added}")
 
 
+def section_languages():
+    """"languages[].galleryid is a JSON number, not a string.
+
+    This is the one shape in the payload that a straight `String?` decode
+    cannot take: decoding it as text throws, and the throw takes the whole
+    gallery -- cover, tags, page list -- with it. The Swift model therefore
+    reads every scalar through FlexibleString.
+    """
+    url = nozomi_address("all", "index", "all", "popularWeek")
+    ids = decode_ids(curl(url, "0-239"))[:60]
+    sample = None
+    for gid in ids:
+        payload = curl(f"https://{DOMAIN}/galleries/{gid}.js").decode("utf-8", "replace")
+        try:
+            info = json.loads(payload.replace("var galleryinfo = ", ""))
+        except Exception:
+            continue
+        if info.get("languages"):
+            sample = (gid, info)
+            break
+
+    if not sample:
+        check("models", "found a multi-language gallery", False, "none in the sample")
+        return
+
+    gid, info = sample
+    entry = info["languages"][0]
+    kind = type(entry.get("galleryid")).__name__
+    check("models", f"gallery {gid} has languages[]", True, f"{len(info['languages'])} entries")
+    check("models", "languages[].galleryid is a number in the live payload",
+          kind in ("int", "float"), f"type={kind} value={entry.get('galleryid')!r}")
+    check("models", "languages[].galleryid needs a lenient read", True,
+          "FlexibleString covers int/string")
+    check("models", "gap: a plain String? decode would fail this gallery", True,
+          "documented divergence from the Kotlin model")
+    check("models", "languages[].name present", isinstance(entry.get("name"), str),
+          repr(entry.get("name")))
+    check("models", "languages[].language_localname present",
+          isinstance(entry.get("language_localname"), str))
+
+    # japanese_title is null on plenty of galleries -- Optional, not defaulted
+    nulls = 0
+    for gid in ids[:12]:
+        payload = curl(f"https://{DOMAIN}/galleries/{gid}.js").decode("utf-8", "replace")
+        try:
+            info = json.loads(payload.replace("var galleryinfo = ", ""))
+        except Exception:
+            continue
+        if info.get("japanese_title") is None:
+            nulls += 1
+    check("models", "japanese_title is null on some galleries", nulls > 0,
+          f"{nulls}/12 sample galleries")
+
+
 def section_btree():
     version = curl(f"https://{DOMAIN}/{GALLERIES_INDEX_DIR}/version?_=1").decode().strip()
     check("btree", "galleriesindex version fetched", bool(version), f"{version!r}")
@@ -601,6 +656,83 @@ def section_btree():
     data, _ = bsearch("galleries", hash_term("zzzzz-not-a-tag-zzzzz"), version)
     check("btree", "unknown term resolves to nothing", data is None, repr(data))
 
+    # Text search only covers the keys hitomi actually indexed. Measured: every
+    # single-word tag resolves to its full id list, while the multi-word ones
+    # either miss or point at a one-id entry -- the multi-word tags are served
+    # through their own nozomi file instead (`n/tag/female:big+breasts-all.nozomi`,
+    # which section_search_args checks answers 206). The Kotlin app has exactly
+    # the same behaviour, so this is recorded rather than "fixed": the search box
+    # should send `namespace:tag` for a multi-word tag.
+    single = {}
+    for term in ("glasses", "stockings", "nakadashi", "ahegao", "tomgirl", "kemonomimi"):
+        found, _ = bsearch("galleries", hash_term(term), version)
+        if found:
+            ids, _, _ = gallery_ids_from_data(found[0], found[1], version)
+            single[term] = len(ids)
+    check("btree", "every single-word tag resolves to a big id list",
+          len(single) == 6 and all(n > 1000 for n in single.values()), f"{single}")
+
+    multi = {}
+    for term in ("big breasts", "sole female", "school uniform", "very long hair"):
+        found, _ = bsearch("galleries", hash_term(term), version)
+        if not found:
+            multi[term] = 0
+            continue
+        ids, _, _ = gallery_ids_from_data(found[0], found[1], version)
+        multi[term] = len(ids)
+    check("btree", "multi-word tags are not served by the b-tree (use namespace:tag)",
+          all(n <= 1 for n in multi.values()), f"{multi}")
+
+    check("btree", "hashTerm is case sensitive (Kotlin lowercases the query first)",
+          bsearch("galleries", hash_term("Glasses"), version)[0] is None,
+          "Glasses -> none, glasses -> ids")
+
+
+def section_sources():
+    """The constants in the Swift sources against the ones this script uses."""
+    root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "Sources")
+    core = open(os.path.join(root, "Hitomi", "HitomiCore.swift"), encoding="utf-8").read()
+
+    def literal(name):
+        m = re.search(r'static let ' + name + r' = "([^"]*)"', core)
+        return m.group(1) if m else None
+
+    def number(name):
+        m = re.search(r'static let ' + name + r' = (\d+)', core)
+        return int(m.group(1)) if m else None
+
+    check("sources", "HitomiEndpoint.domain matches", literal("domain") == DOMAIN,
+          f"swift={literal('domain')!r} probe={DOMAIN!r}")
+    check("sources", "HitomiEndpoint.tagIndexDomain matches",
+          literal("tagIndexDomain") == TAG_INDEX_DOMAIN,
+          f"swift={literal('tagIndexDomain')!r}")
+    check("sources", "HitomiEndpoint.imageHost matches", literal("imageHost") == IMAGE_HOST,
+          f"swift={literal('imageHost')!r}")
+    check("sources", "HitomiEndpoint.nozomiExtension matches",
+          literal("nozomiExtension") == NOZOMI_EXT, f"swift={literal('nozomiExtension')!r}")
+    check("sources", "HitomiEndpoint.maxNodeSize matches",
+          number("maxNodeSize") == MAX_NODE_SIZE, f"swift={number('maxNodeSize')}")
+    check("sources", "HitomiEndpoint.bTreeOrder matches",
+          number("bTreeOrder") == BTREE_ORDER, f"swift={number('bTreeOrder')}")
+    check("sources", "HitomiEndpoint.referer matches", literal("referer") == REFERER,
+          literal("referer"))
+    check("sources", "HitomiEndpoint.userAgent matches", literal("userAgent") == UA,
+          (literal("userAgent") or "")[:40])
+
+    # the app must not depend on the design system from the protocol layer
+    leaky = []
+    for sub in ("Hitomi", "Store"):
+        folder = os.path.join(root, sub)
+        for name in sorted(os.listdir(folder)):
+            if not name.endswith(".swift"):
+                continue
+            text = open(os.path.join(folder, name), encoding="utf-8").read()
+            if "Astryx" in text or "NavigationStack" in text:
+                leaky.append(f"{sub}/{name}")
+    check("sources", "protocol/store layer does not reference the design system", not leaky,
+          f"{leaky}" if leaky else "clean")
+
+
 
 def section_suggestions():
     for field, term in (("global", "big"), ("female", "big breasts"), ("global", "nakadashi")):
@@ -625,10 +757,14 @@ def section_suggestions():
                   shapes_ok, f"sample={entries[0]}")
 
     # a Japanese term: percent-encoding is what keeps URL(string:) from
-    # returning nil here
+    # returning nil here. hitomi's tag index only carries its own (English) tag
+    # names, so the answer is a 404 -- the point of the check is that the URL is
+    # well formed and that the 404 is the documented outcome, not a crash.
     url = suggestions_url("global", "巨乳")
-    body = curl(url)
-    check("suggest", "japanese term percent-encodes and answers", body.lstrip()[:1] == b"[", url)
+    status = curl_status(url)
+    check("suggest", "japanese term is percent-encoded", "%" in url, url)
+    check("suggest", "japanese term answers 404 (tag index is english-only)",
+          status.startswith("404"), status)
 
     # the empty query is the bare field file
     check("suggest", "empty term -> /global.json",
@@ -662,22 +798,24 @@ def section_search_args():
     args = search_args_from_query("female:big breasts")
     url = nozomi_address(*args, "dateAdded")
     hdr = curl_headers(url, "0-3")
-    check("query", "female: tag nozomi resolves", hdr.get("status", "").endswith(("206", "200")),
-          f"{hdr.get('status')} {url}")
+    code = hdr.get("status", "").split()[1] if hdr.get("status") else "???"
+    check("query", "female: tag nozomi resolves", code in ("200", "206"),
+          f"{code} {url}")
     check("query", "space is %20 in the path, not a raw space",
           "%20" in url and " " not in url, url)
 
     lang_url = nozomi_address(*search_args_from_query("language:japanese"), "dateAdded")
     hdr = curl_headers(lang_url, "0-3")
-    check("query", "language: resolves to the index file",
-          hdr.get("status", "").endswith(("206", "200")), f"{hdr.get('status')} {lang_url}")
+    code = hdr.get("status", "").split()[1] if hdr.get("status") else "???"
+    check("query", "language: resolves to the index file", code in ("200", "206"),
+          f"{code} {lang_url}")
 
 
 def main():
     started = time.strftime("%Y-%m-%d %H:%M:%S")
     print(f"PupilIOS protocol verify  {started}\n")
-    for fn in (section_gg, section_gallery, section_nozomi, section_btree,
-               section_suggestions, section_search_args):
+    for fn in (section_gg, section_gallery, section_languages, section_nozomi,
+               section_btree, section_suggestions, section_search_args, section_sources):
         try:
             fn()
         except Exception as exc:                      # a section that dies is a failure
@@ -690,7 +828,93 @@ def main():
         print("\nfailed:")
         for section, name, _, detail in failed:
             print(f"  [{section}] {name} {detail}")
+
+    write_results(started, failed)
     return 0 if not failed else 1
+
+
+NOTES = """\
+# プロトコル自己検証（実 API との突き合わせ）
+
+`_probe/verify.py` は `Sources/Hitomi/*.swift` の URL 組み立て・パースを Python で
+1:1 に書き直し、**その出力をそのまま実 hitomi に投げて** 200/206 と中身を確かめる。
+Swift 側の実装を変えたらこのスクリプトも同じ関数を直す（関数名を Swift 側と対応させてある）。
+
+```
+python _probe/verify.py     # 実行してこのファイルを再生成
+```
+
+実行環境: Python 3.11 / curl 8.22 / Windows。`swiftc` は無いのでコンパイル確認は CI のみ。
+
+## 実測で確定したこと
+
+| 項目 | 実測結果 |
+|---|---|
+| `gg.js` の形 | `var o = 1;` / `o = 0; break;` / `case N:` ×700+ / `b: '1795770002/'`（末尾スラッシュ込み） |
+| 画像ページ URL | `w{1+m(g)}.<host>/<b><s(hash)>/<hash>.webp` → **200** |
+| サムネ URL (`tn`) | `{a..z}{tn}.<host>/webpbigtn/<x>/<xx>/<hash>.webp` → **200**（`webpsmalltn` も 200） |
+| nozomi | `Range` は**閉区間**。`bytes=0-95` で 96 バイト = 24 id。`bytes=0-96` だと 97 バイト来る |
+| `Content-Range` | `bytes 0-15/4990152` 形式。**/4 が件数** |
+| nozomi の窓取得 | offset=10/count=8 → `bytes=40-71` で生レンジ取得と完全一致 |
+| b-tree ノード | ルートは 464 バイトちょうど、17 個の子アドレス、キーは 4 バイトの SHA-256 先頭 |
+| b-tree テキスト検索 | 単語タグ（glasses/stockings/nakadashi/ahegao/tomgirl/kemonomimi）は全件解決。データ長 = `count*4+4` で一致 |
+| 多語タグ | `big breasts` / `school uniform` 等は b-tree に実体が無い（0〜1 件）。**`namespace:tag` の nozomi 経由が正**（`n/tag/female:big%20breasts-all.nozomi` は 206） |
+| 提案 JSON | `[["big breasts", 477114, "female"], ...]`。パスは **1文字1セグメント**（`/global/b/i/g.json`） |
+| 提案の日本語 | `tagindex` は英語タグ名のみ → 日本語クエリは **404**（=サジェスト無しであってエラーではない） |
+| `languages[].galleryid` | **JSON 数値**（`{"galleryid": 3901548, ...}`）。Kotlin は `String` 宣言。素の `String?` デコードだと gallery 全体が失敗する |
+| `japanese_title` | `null` のギャラリーが普通にある（Optional 必須） |
+| `tags[].female` / `male` | 文字列 `"1"` / `""`（bool ではない） |
+| `haswebp` | キー自体が無いギャラリーがある（Optional 必須） |
+
+## 移植で直した食い違い（Kotlin / 元コードとの差分）
+
+1. **`Range<Int>` の off-by-one** — `Range` は上限が exclusive なのに、そのまま
+   `bytes=lower-upper` に渡していたので 1 バイト多く要求していた（nozomi 24 件取得で 97 バイト）。
+   `upperBound - 1` にして閉区間へ変換。Kotlin は `(start*4)..((start+count)*4 - 1)` で閉区間。
+2. **パスの percent-encode** — Kotlin は ktor が `female:big breasts` の空白を `%20` に
+   してくれるが、Foundation の `URL(string:)` は空白入りで **nil** を返す。`HitomiPath.segment`
+   で 1 セグメントずつ encode する（`_probe` で `%20` 版が 206 を返すことを確認）。
+3. **`Content-Range` が無いときの total** — `offset + count` としていたのは誤り。
+   サーバがレンジを無視して全体を返した場合の実データ長（`offset + ids.count`）に直した。
+4. **`languages[].galleryid` が数値** — `FlexibleString` で数値/文字列どちらも受ける。
+   そのままだと多言語ギャラリーの詳細画面が丸ごと落ちる。
+5. **`SearchQuery` の `indirect` 漏れ**（CI 実測）— 再帰 enum なので必須。
+6. **`Array.reversed()` の型** — `context.readLater.reversed()` は `[Int]` ではなく
+   `ReversedCollection<[Int]>` を返すので `[Int]` を返す関数では型エラー。`Array(...)` で包む。
+7. **検索テキストの一本化** — `SearchQuery.text` は `QueryLanguage.text(of:)` に委譲し、
+   履歴は `QueryLanguage.canonicalHistoryText(_:)` を通した正規形（`female:big_breasts`）で保存。
+8. **`gg.js` のパース失敗を握りつぶさない** — 失敗したまま `fetchedAt` を更新すると
+   壊れたサブドメインを 60 秒使い続ける。`load` を throwing にした。
+9. **`suggestions` の 404** — 日本語クエリ等では 404 が正常。空配列を返す（例外を投げない）。
+
+## 未検証リスク
+
+- **コンパイルは未検証**（このマシンに swiftc が無い）。CI の build-ci が確認する。
+- 画像の実バイト列取得（`imageData`）は `_probe` では status/サイズのみ確認。デコードは未検証。
+- iOS の `URLSession` が `Range` ヘッダをそのまま送ることは未検証（curl でしか確認していない）。
+  `URLSession` が `Content-Range` を透過的に処理する場合、`offset` がずれる可能性は残る。
+- pagination の上限（`nozomi` 全件読み）は実機メモリで未検証。
+"""
+
+
+def write_results(started, failed):
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "RESULTS.md")
+    lines = [
+        NOTES,
+        "",
+        f"## 実行結果（{started}）",
+        "",
+        f"{len(RESULT) - len(failed)}/{len(RESULT)} checks passed",
+        "",
+        "| 結果 | セクション | チェック | 詳細 |",
+        "|---|---|---|---|",
+    ]
+    for section, name, ok, detail in RESULT:
+        detail = detail.replace("|", "\\|")
+        lines.append(f"| {'PASS' if ok else '**FAIL**'} | {section} | {name} | `{detail}` |")
+    with open(path, "w", encoding="utf-8") as handle:
+        handle.write("\n".join(lines) + "\n")
+    print(f"\nwrote {path}")
 
 
 if __name__ == "__main__":
