@@ -1,0 +1,9 @@
+121:     /// Deliberately *not* named `isZooming`: `UIScrollView` already has a
+122:     /// read-only `isZooming` (true only until the pinch ends, so it is false
+125:     private var isUserZooming = false
+198:         let touches = (isUserZooming || !isAtFitScale) ? 1 : 2
+322:     func viewForZooming(in scrollView: UIScrollView) -> UIView? {
+339:     func scrollViewWillBeginZooming(_ scrollView: UIScrollView, with view: UIView?) {
+340:         isUserZooming = true
+344:     func scrollViewDidEndZooming(_ scrollView: UIScrollView, with view: UIView?, atScale scale: CGFloat) {
+345:         isUserZooming = false

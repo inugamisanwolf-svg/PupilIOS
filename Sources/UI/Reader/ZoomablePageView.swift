@@ -9,16 +9,17 @@ import UIKit
 /// the reader so it can show or hide its bars.
 ///
 /// The reader is a paging `TabView`, which is a scroll view too, so two pan
-/// recognisers meet on the same touch. At 1x this page has nothing to pan, and
-/// if its pan began the page turn would stop working: the page disables its own
-/// pan while it is at its minimum zoom, which lets the drag travel up to the
-/// pager. Zoomed in, the pan is allowed and the page moves under the finger
-/// instead of turning. The pinch recogniser is deliberately left alone, so
-/// zooming never depends on that decision.
+/// recognisers meet on the same touch. At 1x this page has nothing to pan, and if
+/// its pan claimed the drag the page turn would stop working: at fit scale the
+/// page's pan is narrowed to two fingers, so a one-finger drag travels up to the
+/// pager, and zoomed in one finger pans the page instead of turning it.
 ///
-/// The pan's *delegate* cannot be reassigned to make this decision: UIKit throws
-/// ("UIScrollView's built-in pan gesture recognizer must have its scroll view as
-/// its delegate") the moment `init` runs. `isEnabled` is the handle that works.
+/// The pan is never disabled and its delegate is never reassigned. Reassigning
+/// the delegate throws ("UIScrollView's built-in pan gesture recognizer must have
+/// its scroll view as its delegate"), and leaving the recogniser enabled at all
+/// times keeps the zoom engine untouched: zooming is driven by
+/// `pinchGestureRecognizer`, which nothing here modifies, so "can this page
+/// zoom" never depends on the page-turn decision.
 struct ZoomablePageView: UIViewRepresentable {
     let url: URL
     let onTap: () -> Void
@@ -115,8 +116,13 @@ final class ZoomScrollView: UIScrollView, UIScrollViewDelegate {
     private let doubleTapZoom: CGFloat = 2.5
     private let maximumZoom: CGFloat = 4
 
-    /// True while the user is pinching or while a zoomed page is settling.
-    private var isZooming = false
+    /// True while a pinch is running or a zoomed page is settling.
+    ///
+    /// Deliberately *not* named `isZooming`: `UIScrollView` already has a
+    /// read-only `isZooming` (true only until the pinch ends, so it is false
+    /// during the deceleration that follows). Keeping our own flag under a
+    /// different name means the two can never be confused.
+    private var isUserZooming = false
 
     /// True when the page is showing at its fitted size, so nothing is off screen
     /// to pan to.
@@ -176,20 +182,28 @@ final class ZoomScrollView: UIScrollView, UIScrollViewDelegate {
         updatePanAvailability()
     }
 
-    /// Lets the page's own pan start only where there is something to pan to.
+    /// Keeps a one-finger drag out of the page while there is nothing to pan to.
     ///
     /// At fit scale the page has nothing off screen, and a scroll view that keeps
-    /// its pan would swallow the horizontal drag the reader turns pages with.
-    /// Toggling `isEnabled` is the only handle UIKit leaves here: handing the pan
-    /// a different delegate throws ("UIScrollView's built-in pan gesture
-    /// recognizer must have its scroll view as its delegate"), and overriding
-    /// `gestureRecognizerShouldBegin` is not reachable because the scroll view's
-    /// conformance to `UIGestureRecognizerDelegate` is private.
+    /// its one-finger pan would swallow the horizontal drag the reader turns pages
+    /// with. Narrowing the pan to two fingers is the cheapest way to hand that drag
+    /// up to the pager: the recogniser stays enabled, so nothing about the zoom
+    /// engine changes (a different delegate throws, and overriding
+    /// `gestureRecognizerShouldBegin` is unreachable because the scroll view's
+    /// conformance to `UIGestureRecognizerDelegate` is private).
+    ///
+    /// Two fingers still pan at fit scale, but `contentSize` equals the fitted
+    /// image, so there is nothing for them to move.
     private func updatePanAvailability() {
-        let shouldPan = isZooming || !isAtFitScale
+        let touches = (isUserZooming || !isAtFitScale) ? 1 : 2
 
-        if panGestureRecognizer.isEnabled != shouldPan {
-            panGestureRecognizer.isEnabled = shouldPan
+        if panGestureRecognizer.minimumNumberOfTouches != touches {
+            panGestureRecognizer.minimumNumberOfTouches = touches
+        }
+
+        // 無効化はしない。過去に無効化していた状態が残っていても必ず戻す。
+        if !panGestureRecognizer.isEnabled {
+            panGestureRecognizer.isEnabled = true
         }
     }
 
@@ -323,12 +337,12 @@ final class ZoomScrollView: UIScrollView, UIScrollViewDelegate {
     }
 
     func scrollViewWillBeginZooming(_ scrollView: UIScrollView, with view: UIView?) {
-        isZooming = true
+        isUserZooming = true
         updatePanAvailability()
     }
 
     func scrollViewDidEndZooming(_ scrollView: UIScrollView, with view: UIView?, atScale scale: CGFloat) {
-        isZooming = false
+        isUserZooming = false
         updatePanAvailability()
     }
 
