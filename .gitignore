@@ -1,0 +1,42 @@
+# Xcode / build output
+build/
+DerivedData/
+dist/
+Payload/
+*.ipa
+*.xcarchive
+*.xcuserstate
+xcuserdata/
+*.xcodeproj
+*.xcworkspace
+!project.yml
+
+# SwiftPM
+.build/
+.swiftpm/
+Package.resolved.bak
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Node (design tooling only — keep design/ itself tracked)
+design/node_modules/
+node_modules/
+npm-debug.log*
+pnpm-debug.log*
+
+# Editors / OS
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
+*.swp
+
+# CI scratch
+ci-logs/
+ci-run/
+*.log
