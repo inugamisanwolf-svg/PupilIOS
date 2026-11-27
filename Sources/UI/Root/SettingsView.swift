@@ -186,7 +186,7 @@ struct SettingsView: View {
                 }
             }
             .scrollContentBackground(.hidden)
-            .background(theme.background.ignoresSafeArea())
+            .background(theme.screenBackground.ignoresSafeArea())
             .tint(theme.accent)
             .navigationTitle("設定")
             .navigationBarTitleDisplayMode(.inline)
@@ -306,7 +306,7 @@ private struct AstryxSettingsSurface: View {
         }
         .padding(theme.space(.md))
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(theme.background.ignoresSafeArea())
+        .background(theme.screenBackground.ignoresSafeArea())
         .navigationTitle("Astryx 設定")
         .navigationBarTitleDisplayMode(.inline)
     }
@@ -446,7 +446,7 @@ private struct AboutView: View {
             }
             .padding(theme.space(.md))
         }
-        .background(theme.background.ignoresSafeArea())
+        .background(theme.screenBackground.ignoresSafeArea())
         .navigationTitle("Pupil について")
         .navigationBarTitleDisplayMode(.inline)
     }
@@ -466,7 +466,7 @@ private struct AstryxAboutPage: View {
     var body: some View {
         AstryxWebView(surface: .about, payload: aboutPayload, onEvent: handleEvent)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(theme.background.ignoresSafeArea())
+            .background(theme.screenBackground.ignoresSafeArea())
             .navigationTitle("Astryx About")
             .navigationBarTitleDisplayMode(.inline)
     }

@@ -279,7 +279,7 @@ static func borderOpacity(forHex hex: String) -> Double {
 `WallpaperView(palette:)` は Root の最背面に敷く（既定で `.ignoresSafeArea()`）。レイヤ構成:
 
 1. `base` — `.image` なら写真を `scaledToFill`、`.preset` ならグラデーション、`.none` なら `palette.background` べた
-2. `scrim` — **画像のときだけ** `Color.black` を重ねる。不透明度は `0〜0.35`:
+2. `scrim` — **画像が実際に描けるときだけ** `Color.black` を重ねる。不透明度は `0〜0.35`:
 
 ```swift
 static func scrimOpacity(forBackgroundHex hex: String) -> Double {
@@ -291,7 +291,32 @@ static func scrimOpacity(forBackgroundHex hex: String) -> Double {
 
 プリセット壁紙は元から低輝度に設計しているのでスクリムは敷かない（敷くとほぼ黒になる）。サムネイル用途は `init(palette:fillsSafeArea: false)` で親サイズに収める。
 
-### 7.5 永続化
+**フォールバック（黒画面を作らない）**: `palette.wallpaper.kind == .image` でも
+`WallpaperImageCache.shared.image(fileName:)` が nil を返す（ファイル欠損・デコード失敗）場合は
+`Color` べたにせず **`WallpaperPresetLayer` のグラデーションへ落とす**。未知の `presetID` も `paper` に落とす。
+
+```swift
+private var fallbackPreset: WallpaperPreset {
+    WallpaperPreset(rawValue: palette.wallpaper.presetID) ?? .paper
+}
+```
+
+### 7.4.1 `screenBackground` — 壁紙が隠れる問題の対策
+
+Root の最背面に壁紙を敷いても、**各画面が不透明な `theme.background` で塗ると壁紙は見えない**。
+そこで `AstryxTheme` に `screenBackground` を用意した。各画面の地色は必ずこれを使う。
+
+| 状態 | `screenBackground` | 理由 |
+|---|---|---|
+| `.none` | `background`（不透明） | 壁紙が無いので従来どおり |
+| `.preset`（既知の ID） | `Color.clear` | グラデーションが見える |
+| `.image`（実ファイルあり） | `Color.clear` | 写真が見える |
+| 未知の `presetID` / 画像ファイル欠損 | `background`（不透明） | 描画できないので地色で塗る |
+
+カードや行（`listRowBackground`）は不透明なまま（`theme.card` / `theme.surface`）なので、可読性は落ちない。
+`AstryxTheme` は struct なので computed property で毎回パレットを読む（`ThemeStore.shared.palette`）。
+
+### 7.5 永続化・取り込み・向き
 
 | 対象 | 場所 |
 |---|---|
@@ -300,9 +325,22 @@ static func scrimOpacity(forBackgroundHex hex: String) -> Double {
 | 壁紙画像 | `Application Support/Wallpaper/wallpaper-<UUID>.jpg` |
 
 - 取り込み時は**長辺 2400px に縮小**して JPEG（quality 0.92、失敗時 PNG）で保存。`Wallpaper.fileName` に持つ。
+- **向き**: 縮小は `CGImageSourceCreateThumbnailAtIndex` + `kCGImageSourceCreateThumbnailWithTransform: true` で行うので、**EXIF の回転がピクセルに焼き込まれる**（横向き写真が保存後に回転しない）。ImageIO が扱えない形式だけ `UIImage.draw(in:)` による再描画にフォールバック（これも向きを適用する）。
 - 差し替え・「なし」へ変更時は**旧ファイルを削除**。取り込み後は `removeOrphans(keeping:)` で孤立ファイルも掃除。
-- 起動時にファイルが消えていたら壁紙を「なし」に落とす。
+- **自己修復**: 起動時（`ThemeStore.init`）に `ThemeStore.healedWallpaper(_:fallbackID:)` で
+  壊れた壁紙をプリセットへ戻す（`.image` で実ファイルが無い → `presetID` → プリセット既定 → `paper` の順）。
+  これが無いと次回起動で黒一色になる。
 - `revision` は変更のたびに +1。Root が `.id(ThemeStore.shared.revision)` で TabView を再構築する。
+
+**`importWallpaper(data:)` の成功条件**（すべて満たしたときだけ `true`）:
+
+1. 画像として解釈できる（ImageIO / `UIImage`）
+2. `Application Support/Wallpaper/` へ書き込み成功
+3. `palette.wallpaper = .image(fileName)`
+4. `revision += 1`（`commit()` 内）
+5. **直後に読み戻せる**こと（`save` がキャッシュに投入済み + 書き込み直後に `image(fileName:)` で検証。失敗したら保存物を削除して `false`）
+
+5 が抜けると「取り込み直後は黒い／再起動したら出る」になるため、`palette` を書き換える**前に**検証している。
 
 ### 7.6 編集画面（`ThemeEditorView`）
 
@@ -320,6 +358,8 @@ static func scrimOpacity(forBackgroundHex hex: String) -> Double {
 3. `border` の alpha 変換は近似（`--color-border` の `0x1A` を 0.12 として再現）。厳密一致ではない。
 4. 壁紙画像は JPEG 再エンコードで保存するため、透過 PNG は不透明化される（壁紙用途では問題なしと判断）。
 5. `ThemePreset` の 4 プリセットの `surfaceRaised` / `textSecondary` は導出値。Lead 指定の 4 色以外は「決定的だがデザイン検証はしていない」値。
+6. **各画面の地色は `theme.screenBackground` を使うこと**。`theme.background` で塗ると壁紙が完全に隠れる（v1.0.4 で実機報告のあった不具合）。`Sources/UI/**` 側の置換は ui-browse / ui-reader が担当。
+7. 壁紙ファイルが「存在するが壊れている」場合、`screenBackground` は `Color.clear`（ファイル存在で判定）を返し、`WallpaperView` 側はグラデーションを描く。黒画面にはならないが、厳密には背景色と壁紙の状態が一致しない。
 
 ## 8. ライセンス
 

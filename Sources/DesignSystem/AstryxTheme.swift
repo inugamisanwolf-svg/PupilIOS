@@ -78,6 +78,25 @@ struct AstryxTheme {
     /// カードの区切りは `border` の 1px だけ。壁紙の上では不透明パネルとして効く。
     var card: Color
 
+    /// 画面の地の色。**壁紙が有効なら透明**にして、Root が最背面に敷いている
+    /// `WallpaperView` を見せる（各画面が不透明色で塗り潰すと壁紙が隠れるため）。
+    ///
+    /// - `.none`                        → `background`（従来どおり不透明）
+    /// - `.preset`（既知の ID）          → `Color.clear`
+    /// - `.image`（実ファイルがある）     → `Color.clear`
+    /// - 未知 ID / ファイル欠損           → `background`
+    var screenBackground: Color {
+        let wallpaper = ThemeStore.shared.palette.wallpaper
+        switch wallpaper.kind {
+        case .none:
+            return background
+        case .preset:
+            return WallpaperPreset(rawValue: wallpaper.presetID) == nil ? background : Color.clear
+        case .image:
+            return WallpaperImageCache.shared.exists(fileName: wallpaper.fileName) ? Color.clear : background
+        }
+    }
+
     // 文字
     var textPrimary: Color
     var textSecondary: Color

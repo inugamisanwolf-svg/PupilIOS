@@ -69,7 +69,7 @@ struct SearchView: View {
                 )
             }
         }
-        .background(theme.background)
+        .background(theme.screenBackground)
     }
 
     /// 入力中だけサジェストを出す（送信済みの結果の上に被せない）。

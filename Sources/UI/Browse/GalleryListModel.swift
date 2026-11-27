@@ -188,59 +188,91 @@ final class GalleryListModel: ObservableObject {
     }
 
     /// 1 ページだけ読む。進んだら true（＝もう 1 ページ読む価値がある）。
+    ///
+    /// 429（レート制限）とカード全滅（gallery.js が 429/切断で落ちた場合が典型）は、
+    /// 1 秒待って **1 回だけ**静かに取り直す。長距離スクロールでの体感を守りつつ、
+    /// エラー面を出さずに済むケースを増やす。
     @discardableResult
     private func loadPageOnce(source current: GalleryListSource) async -> Bool {
         let gen = generation
-        let beforeCount = blocks.count
-        let beforePage = pageCount
+        var retried = false
 
-        loading = true
-        errorMessage = nil
+        while true {
+            let beforeCount = blocks.count
+            let beforePage = pageCount
 
-        do {
-            let ids = try await idsForNextPage(source: current)
-            guard gen == generation else { return false }
+            loading = true
+            errorMessage = nil
 
-            if ids.isEmpty {
-                hasMore = false
+            do {
+                let ids = try await idsForNextPage(source: current)
+                guard gen == generation else { return false }
+
+                if ids.isEmpty {
+                    hasMore = false
+                    loading = false
+                    return false
+                }
+
+                let fetched = await GalleryListModel.fetchBlocks(ids: ids)
+                guard gen == generation else { return false }
+
+                if fetched.isEmpty {
+                    // ID は取れたのにカードが 1 枚も作れなかった（404 / 429 /
+                    // タイムアウト / 切断）。ここで id を捨てるとそのページが
+                    // 永久に欠番になるので、`pendingIDs` に戻して次の試行へ。
+                    pendingIDs = ids
+
+                    if !retried {
+                        retried = true
+                        try? await Task.sleep(nanoseconds: 1_000_000_000)
+                        if Task.isCancelled || gen != generation {
+                            loading = false
+                            return false
+                        }
+                        continue
+                    }
+
+                    loading = false
+                    errorMessage = "ギャラリー情報を取得できませんでした。通信状況を確認して再試行してください。"
+                    return false
+                }
+
+                // `ForEach(blocks)` / `LazyVGrid` の id は GalleryBlock.id なので、
+                // 同じ ID が 2 枚入ると描画が壊れる（SwiftUI の id 重複）。
+                let known = Set(blocks.map { $0.id })
+                let fresh = fetched.filter { !known.contains($0.id) }
+                if !fresh.isEmpty {
+                    blocks.append(contentsOf: fresh)
+                }
+                pageCount += 1
                 loading = false
-                return false
-            }
 
-            let fetched = await GalleryListModel.fetchBlocks(ids: ids)
-            guard gen == generation else { return false }
+                // 重複だけで 1 件も増えなくても、ページは 1 つ進んだ（＝続きはある）。
+                return blocks.count > beforeCount || pageCount > beforePage
+            } catch {
+                guard gen == generation else { return false }
 
-            if fetched.isEmpty {
-                // ID は取れたのにカードが 1 枚も作れなかった（404 / 429 /
-                // タイムアウト / 切断）。ここで id を捨てるとそのページが
-                // 永久に欠番になるので、次の試行に回して止める。
-                pendingIDs = ids
-                errorMessage = "ギャラリー情報を取得できませんでした。通信状況を確認して再試行してください。"
+                if Task.isCancelled || GalleryListModel.isCancellation(error) {
+                    // タブ移動 / 条件変更で `.task` がキャンセルされただけ。
+                    loading = false
+                    return false
+                }
+
+                if !retried && GalleryListModel.isRateLimited(error) {
+                    retried = true
+                    try? await Task.sleep(nanoseconds: 1_000_000_000)
+                    if Task.isCancelled || gen != generation {
+                        loading = false
+                        return false
+                    }
+                    continue
+                }
+
                 loading = false
+                errorMessage = GalleryListModel.describe(error)
                 return false
             }
-
-            // `ForEach(blocks)` / `LazyVGrid` の id は GalleryBlock.id なので、
-            // 同じ ID が 2 枚入ると描画が壊れる（SwiftUI の id 重複）。
-            let known = Set(blocks.map { $0.id })
-            let fresh = fetched.filter { !known.contains($0.id) }
-            if !fresh.isEmpty {
-                blocks.append(contentsOf: fresh)
-            }
-            pageCount += 1
-            loading = false
-
-            // 重複だけで 1 件も増えなくても、ページは 1 つ進んだ（＝続きはある）。
-            return blocks.count > beforeCount || pageCount > beforePage
-        } catch {
-            guard gen == generation else { return false }
-            loading = false
-            if Task.isCancelled || GalleryListModel.isCancellation(error) {
-                // タブ移動 / 条件変更で `.task` がキャンセルされただけ。
-                return false
-            }
-            errorMessage = GalleryListModel.describe(error)
-            return false
         }
     }
 
@@ -289,12 +321,21 @@ final class GalleryListModel: ObservableObject {
     private func fillStaged(sort: SortMode, language: String, needed: Int) async throws {
         let args = SearchArgs(area: "all", tag: "index", language: language)
 
+        // 人気順の nozomi は同じ ID の重複や削除済み作品の ID を多く含むため、
+        // 1 窓（60 件）が全部「既出」になることがある。そこで即打ち切ると
+        // 「まだ続きがあるのに終了」になる（実機症状: 既定の人気順だけ数ページで
+        // 止まり、追加日順だと長く続く）。連続で空窓が続いたときだけ打ち切る。
+        var emptyWindows = 0
+
         while stagedIDs.count < needed && !remoteExhausted {
+            let requestedOffset = remoteOffset
+            let requestedCount = GalleryListModel.windowSize
+
             let window = try await HitomiClient.shared.nozomiWindow(
                 args,
                 sort,
-                offset: remoteOffset,
-                count: GalleryListModel.windowSize
+                offset: requestedOffset,
+                count: requestedCount
             )
 
             if window.ids.isEmpty {
@@ -303,6 +344,11 @@ final class GalleryListModel: ObservableObject {
             }
 
             remoteOffset += window.ids.count
+
+            // `Content-Range` が無いときの `nozomiWindow` の total は
+            // 「要求した offset + 件数」になる（＝末尾に見える）。この値で
+            // 打ち切ると 1 ページで終わってしまうので、その場合は総数判定をしない。
+            let totalLooksLikeFallback = window.total == requestedOffset + requestedCount
             if window.total > 0 {
                 total = window.total
             }
@@ -314,14 +360,26 @@ final class GalleryListModel: ObservableObject {
                 added += 1
             }
 
-            // 新しい ID が 1 件も増えない窓は、nozomi 側がずれている
-            // （＝これ以上先へ進んでも同じものが返る）。回り続けないよう打ち切る。
+            // 要求より短い窓が返った＝ nozomi ファイルの末尾。
+            let reachedEndOfFile = window.ids.count < requestedCount
+
             if added == 0 {
+                emptyWindows += 1
+                if reachedEndOfFile || emptyWindows >= 3 {
+                    remoteExhausted = true
+                    break
+                }
+                // `remoteOffset` は進んでいるので、次の窓を読みに行く。
+                continue
+            }
+            emptyWindows = 0
+
+            if reachedEndOfFile {
                 remoteExhausted = true
-                break
             }
 
-            if window.ids.count < GalleryListModel.windowSize {
+            // 総数に到達（Content-Range 由来の確かな total のときだけ）。
+            if !totalLooksLikeFallback && total > 0 && remoteOffset >= total {
                 remoteExhausted = true
             }
         }
@@ -378,14 +436,66 @@ final class GalleryListModel: ObservableObject {
         return out
     }
 
+    /// 画面に出す文言。**英語や Cocoa の生メッセージは絶対に返さない**
+    /// （実機で "RAW データをデコードできません" がそのまま出た）。詳細は NSLog に落とす。
     nonisolated static func describe(_ error: Error) -> String {
+        NSLog("[Pupil] gallery list error: %@", String(describing: error))
+
+        let nsError = error as NSError
+
         if let hitomi = error as? HitomiError {
             switch hitomi {
-            case .badStatus(let code): return "サーバーエラー（HTTP \(code)）"
-            case .malformed(let what): return "応答を解釈できませんでした（\(what)）"
-            case .badURL(let what): return "URL が不正です（\(what)）"
+            case .badStatus(let code):
+                switch code {
+                case 403:
+                    return "アクセスが拒否されました（HTTP 403）。しばらく待って再試行してください"
+                case 404:
+                    return "作品が見つかりません"
+                case 429:
+                    return "リクエストが多すぎます。少し待って再試行してください"
+                case 500...599:
+                    return "サーバーが混み合っています（HTTP \(code)）。少し待って再試行してください"
+                default:
+                    return "サーバーエラー（HTTP \(code)）"
+                }
+            case .malformed:
+                return "作品データを読み込めませんでした（一時的な可能性があります）。再試行してください"
+            case .badURL:
+                return "作品情報を読み込めませんでした。通信状況を確認して再試行してください"
             }
         }
-        return error.localizedDescription
+
+        if error is DecodingError {
+            return "作品データを読み込めませんでした（一時的な可能性があります）。再試行してください"
+        }
+
+        // NSCocoaErrorDomain 4864 = NSFileReadCorruptFileError（壊れた RAW データ）
+        if nsError.domain == NSCocoaErrorDomain && nsError.code == 4864 {
+            return "作品データを読み込めませんでした（一時的な可能性があります）。再試行してください"
+        }
+
+        if nsError.domain == NSURLErrorDomain {
+            switch nsError.code {
+            case NSURLErrorNotConnectedToInternet,
+                 NSURLErrorNetworkConnectionLost,
+                 NSURLErrorTimedOut,
+                 NSURLErrorCannotConnectToHost,
+                 NSURLErrorCannotFindHost:
+                return "通信できませんでした。ネットワークを確認して再試行してください"
+            default:
+                break
+            }
+        }
+
+        // ここから下は日本語の定型文のみ（`localizedDescription` は使わない）。
+        return "作品情報を読み込めませんでした。通信状況を確認して再試行してください"
+    }
+
+    /// 429（レート制限）。長距離スクロールで実際に踏む。
+    nonisolated static func isRateLimited(_ error: Error) -> Bool {
+        if let hitomi = error as? HitomiError, case .badStatus(let code) = hitomi, code == 429 {
+            return true
+        }
+        return false
     }
 }

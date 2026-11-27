@@ -54,7 +54,7 @@ struct GalleryDetailView: View {
             }
             .padding(theme.space(.md))
         }
-        .background(theme.background)
+        .background(theme.screenBackground)
         .navigationTitle(titleText)
         .navigationBarTitleDisplayMode(.inline)
         .task {

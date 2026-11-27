@@ -98,17 +98,19 @@ struct WallpaperView: View {
                     .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity)
                     .clipped()
             } else {
-                fallbackBase
+                // 画像が読めない（ファイル欠損・デコード失敗）→ 黒一色にせずプリセットのグラデへ戻す。
+                WallpaperPresetLayer(preset: fallbackPreset)
             }
         case .preset:
-            if let preset = WallpaperPreset(rawValue: palette.wallpaper.presetID) {
-                WallpaperPresetLayer(preset: preset)
-            } else {
-                fallbackBase
-            }
+            WallpaperPresetLayer(preset: fallbackPreset)
         case .none:
             fallbackBase
         }
+    }
+
+    /// 未知の presetID でも `paper` に落として必ず何かを描く。
+    private var fallbackPreset: WallpaperPreset {
+        WallpaperPreset(rawValue: palette.wallpaper.presetID) ?? .paper
     }
 
     /// 壁紙がないとき（または画像が消えていたとき）の背景色。
@@ -118,8 +120,12 @@ struct WallpaperView: View {
     }
 
     /// 画像の上にだけ敷く黒スクリム。プリセットは元から暗いので敷かない。
+    /// 画像が実際に描けない場合（ファイル欠損）はグラデが見えるのでスクリムも外す。
     private var scrim: Color {
-        guard palette.wallpaper.kind == .image else { return Color.clear }
+        guard palette.wallpaper.kind == .image,
+              WallpaperImageCache.shared.exists(fileName: palette.wallpaper.fileName) else {
+            return Color.clear
+        }
         let opacity = AstryxContrast.scrimOpacity(forBackgroundHex: palette.background)
         return Color.black.opacity(opacity)
     }

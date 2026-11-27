@@ -82,7 +82,7 @@ struct ThemeEditorView: View {
         }
         .listStyle(.insetGrouped)
         .scrollContentBackground(.hidden)
-        .background(theme.background)
+        .background(theme.screenBackground)
         .navigationTitle("テーマ")
         .navigationBarTitleDisplayMode(.inline)
         .tint(theme.accent)

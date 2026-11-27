@@ -84,7 +84,7 @@ struct GalleryGrid: View {
             viewportHeight = value
             requestMoreIfNearBottom()
         }
-        .background(theme.background)
+        .background(theme.screenBackground)
         .refreshable {
             await model.refresh()
         }

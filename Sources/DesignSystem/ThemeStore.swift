@@ -19,6 +19,7 @@
 
 import Dispatch
 import Foundation
+import ImageIO
 import SwiftUI
 import UIKit
 
@@ -182,16 +183,37 @@ final class WallpaperImageCache {
         return image
     }
 
-    /// 画像を保存してファイル名を返す。長辺 2400px に縮小して JPEG で保存する。
-    func save(image: UIImage) -> String? {
-        let prepared = WallpaperImageCache.downscaled(image, maxDimension: 2400)
+    /// 実ファイルがあるか（デコードはしない）。`screenBackground` の判定用。
+    func exists(fileName: String) -> Bool {
+        guard !fileName.isEmpty else { return false }
+        if cache.object(forKey: fileName as NSString) != nil { return true }
+        return FileManager.default.fileExists(
+            atPath: WallpaperImageCache.directoryURL.appendingPathComponent(fileName).path
+        )
+    }
 
+    /// 画像データを保存してファイル名を返す（取り込みの本線）。
+    /// `CGImageSource` のサムネイル生成を `kCGImageSourceCreateThumbnailWithTransform: true` で
+    /// 使うので **EXIF の回転がピクセルに焼き込まれる**（横向き写真が保存後に回転しない）。
+    func save(imageData data: Data) -> String? {
+        guard let prepared = WallpaperImageCache.decoded(data: data, maxDimension: 2400) else {
+            return nil
+        }
+        return write(prepared)
+    }
+
+    /// UIImage から保存する版（互換用）。向きは再描画で焼き込む。
+    func save(image: UIImage) -> String? {
+        write(WallpaperImageCache.redrawn(image, maxDimension: 2400))
+    }
+
+    private func write(_ image: UIImage) -> String? {
         let fileName: String
         let bytes: Data
-        if let jpeg = prepared.jpegData(compressionQuality: 0.92) {
+        if let jpeg = image.jpegData(compressionQuality: 0.92) {
             fileName = "wallpaper-\(UUID().uuidString).jpg"
             bytes = jpeg
-        } else if let png = prepared.pngData() {
+        } else if let png = image.pngData() {
             fileName = "wallpaper-\(UUID().uuidString).png"
             bytes = png
         } else {
@@ -204,7 +226,8 @@ final class WallpaperImageCache {
         } catch {
             return nil
         }
-        cache.setObject(prepared, forKey: fileName as NSString)
+        // 取り込み直後でも `wallpaperImage()` が返せるよう、キャッシュに投入しておく。
+        cache.setObject(image, forKey: fileName as NSString)
         return fileName
     }
 
@@ -227,12 +250,41 @@ final class WallpaperImageCache {
         }
     }
 
-    static func downscaled(_ image: UIImage, maxDimension: CGFloat) -> UIImage {
+    /// 受け取った画像データを、向きを正した長辺 `maxDimension` 以下の UIImage にする。
+    ///
+    /// `kCGImageSourceCreateThumbnailWithTransform: true` により **EXIF の回転が適用される**
+    /// （これが無いと横向き写真が回転したまま保存される）。ImageIO が扱えない形式のときだけ
+    /// UIKit の再描画にフォールバックする（`UIImage.draw(in:)` も向きを適用する）。
+    static func decoded(data: Data, maxDimension: CGFloat) -> UIImage? {
+        let pixelSize = Int(maxDimension.rounded())
+
+        if let source = CGImageSourceCreateWithData(data as CFData, nil) {
+            let options: [CFString: Any] = [
+                kCGImageSourceCreateThumbnailFromImageAlways: true,
+                kCGImageSourceCreateThumbnailWithTransform: true,
+                kCGImageSourceThumbnailMaxPixelSize: pixelSize,
+                kCGImageSourceShouldCacheImmediately: true,
+            ]
+            if let thumbnail = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) {
+                return UIImage(cgImage: thumbnail)
+            }
+        }
+
+        guard let image = UIImage(data: data) else { return nil }
+        return redrawn(image, maxDimension: maxDimension)
+    }
+
+    /// 向きが .up でない、または大きすぎる画像を、向きを焼き込んだ上で縮小する。
+    static func redrawn(_ image: UIImage, maxDimension: CGFloat) -> UIImage {
         let size = image.size
         let longest = max(size.width, size.height)
-        guard longest > maxDimension, longest > 0 else { return image }
+        guard longest > 0 else { return image }
 
-        let scale = maxDimension / longest
+        let scale = longest > maxDimension ? maxDimension / longest : 1.0
+        if scale == 1.0 && image.imageOrientation == .up {
+            return image
+        }
+
         let target = CGSize(width: floor(size.width * scale), height: floor(size.height * scale))
         let format = UIGraphicsImageRendererFormat.default()
         format.scale = 1
@@ -241,6 +293,11 @@ final class WallpaperImageCache {
         return renderer.image { _ in
             image.draw(in: CGRect(origin: .zero, size: target))
         }
+    }
+
+    /// 旧名（互換）。
+    static func downscaled(_ image: UIImage, maxDimension: CGFloat) -> UIImage {
+        redrawn(image, maxDimension: maxDimension)
     }
 }
 
@@ -281,12 +338,39 @@ final class ThemeStore: ObservableObject {
         activePreset = (loaded == preset.palette) ? preset : nil
         hasCustomOnAccent = (loaded.onAccent != AstryxContrast.readableHexForeground(on: loaded.accent))
 
-        // 画像壁紙の実ファイルが消えていたら「なし」に落とす。
-        if loaded.wallpaper.kind == .image,
-           WallpaperImageCache.shared.image(fileName: loaded.wallpaper.fileName) == nil {
-            palette.wallpaper = .none
-            activePreset = nil
+        // 壁紙の自己修復: 画像ファイルが消えている / 壊れている場合はプリセットグラデへ戻す。
+        // これをやらないと、次回起動で「黒一色」になる。
+        let healed = ThemeStore.healedWallpaper(
+            palette.wallpaper,
+            fallbackID: preset.defaultWallpaper.presetID
+        )
+        if healed != palette.wallpaper {
+            palette.wallpaper = healed
+            activePreset = (palette == preset.palette) ? preset : nil
             persist()
+        }
+    }
+
+    /// 描画できない壁紙をプリセットへ戻す純粋関数。
+    /// - `.none` はそのまま
+    /// - `.preset` は未知の ID なら `fallbackID`（無効なら `paper`）へ
+    /// - `.image` は実ファイルが無ければ、元の `presetID` → `fallbackID` → `paper` の順で復元
+    static func healedWallpaper(_ wallpaper: Wallpaper, fallbackID: String) -> Wallpaper {
+        switch wallpaper.kind {
+        case .none:
+            return wallpaper
+
+        case .preset:
+            if WallpaperPreset(rawValue: wallpaper.presetID) != nil { return wallpaper }
+            let restored = WallpaperPreset(rawValue: fallbackID)?.rawValue ?? WallpaperPreset.paper.rawValue
+            return .preset(restored)
+
+        case .image:
+            if WallpaperImageCache.shared.exists(fileName: wallpaper.fileName) { return wallpaper }
+            let restored = WallpaperPreset(rawValue: wallpaper.presetID)?.rawValue
+                ?? WallpaperPreset(rawValue: fallbackID)?.rawValue
+                ?? WallpaperPreset.paper.rawValue
+            return .preset(restored)
         }
     }
 
@@ -342,18 +426,37 @@ final class ThemeStore: ObservableObject {
         commit()
     }
 
+    /// 画像を取り込み、壁紙に設定する。
+    ///
+    /// 成功条件（すべて満たしたときだけ true）:
+    ///  1. 画像として解釈できる（ImageIO / UIImage）
+    ///  2. `Application Support/Wallpaper/` に書き込み成功
+    ///  3. `palette.wallpaper = .image(fileName)`
+    ///  4. `revision += 1`（commit 内）
+    ///  5. 直後に `wallpaperImage()` がその画像を返す（`save` がキャッシュに投入済み）
     @discardableResult
     func importWallpaper(data: Data) -> Bool {
         assertMainThread()
-        guard let image = UIImage(data: data) else { return false }
-        guard let fileName = WallpaperImageCache.shared.save(image: image) else { return false }
 
+        // 1 + 2: デコード＆向き補正＆縮小して保存（失敗すれば nil）。
+        guard let fileName = WallpaperImageCache.shared.save(imageData: data) else { return false }
+
+        // 5（先に確認）: 保存したファイルが実際に読み戻せること。
+        // ここを飛ばすと「取り込み直後は黒い／再起動したら出る」になる。
+        guard WallpaperImageCache.shared.image(fileName: fileName) != nil else {
+            WallpaperImageCache.shared.delete(fileName: fileName)
+            return false
+        }
+
+        // 3
         let previous = palette.wallpaper
         palette.wallpaper = .image(fileName)
         if previous.kind == .image, previous.fileName != fileName {
             WallpaperImageCache.shared.delete(fileName: previous.fileName)
         }
         WallpaperImageCache.shared.removeOrphans(keeping: fileName)
+
+        // 4
         commit()
         return true
     }
