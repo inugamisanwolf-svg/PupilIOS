@@ -47,26 +47,29 @@ final class ImageCache {
 
     /// キャッシュ（メモリ → ディスク → ネットワーク）から 1 枚取り出す。
     /// 取得に失敗した場合は `nil`（呼び出し側でプレースホルダを出す）。
+    ///
+    /// `lock()` / `unlock()` は async 文脈では呼ばない（協調スレッドプールを
+    /// 塞ぐため Swift 6 ではエラー）。ロックの取得は下の同期ヘルパに閉じ込めてある。
     func image(for url: URL) async -> UIImage? {
         let key = ImageCache.key(for: url)
 
         if let hit = memory.object(forKey: key as NSString) { return hit }
 
-        let task: Task<UIImage?, Never>
-        lock.lock()
-        if let running = inFlight[key] {
-            task = running
-            lock.unlock()
-        } else {
-            task = Task<UIImage?, Never> { [weak self] in
-                guard let cache = self else { return nil }
-                let loaded = await cache.load(url: url, key: key)
-                cache.finish(key: key)
-                return loaded
-            }
-            inFlight[key] = task
-            lock.unlock()
+        if let running = existingTask(key: key) {
+            return await running.value
         }
+
+        let task = Task<UIImage?, Never> { [weak self] in
+            guard let cache = self else { return nil }
+            let loaded = await cache.load(url: url, key: key)
+            cache.finish(key: key)
+            return loaded
+        }
+        // check と register の間に await が無いので、競合しても最悪 1 枚を
+        // 二重取得するだけ（メモリ/ディスクの結果は同じ）。ここでロックを
+        // 取りっぱなしにすると Task 本体の finish() と競合するため、あえて
+        // 2 段階の同期ヘルパで済ませている。
+        register(task, key: key)
         return await task.value
     }
 
@@ -116,8 +119,22 @@ final class ImageCache {
 
     private func finish(key: String) {
         lock.lock()
+        defer { lock.unlock() }
         inFlight.removeValue(forKey: key)
-        lock.unlock()
+    }
+
+    // MARK: - In-flight map（同期メソッドの中だけでロックする）
+
+    private func existingTask(key: String) -> Task<UIImage?, Never>? {
+        lock.lock()
+        defer { lock.unlock() }
+        return inFlight[key]
+    }
+
+    private func register(_ task: Task<UIImage?, Never>, key: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        inFlight[key] = task
     }
 
     // MARK: - Disk

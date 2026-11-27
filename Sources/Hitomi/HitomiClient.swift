@@ -291,6 +291,11 @@ actor HitomiClient {
     /// without asking hitomi for forty galleries at once. An ID that fails is
     /// dropped rather than failing the whole grid -- one deleted gallery should
     /// not blank out a favourites screen.
+    ///
+    /// **API contract, relied on by `Sources/UI`:** non-throwing, order
+    /// preserving, failures dropped. A caller must never need `try?` around
+    /// this, and must never have to re-sort the result; changing it to throw or
+    /// to filter silently would break `GalleryListModel` and the related grid.
     func galleryBlocks(_ ids: [Int]) async -> [GalleryBlock] {
         guard !ids.isEmpty else { return [] }
 
@@ -325,6 +330,9 @@ actor HitomiClient {
     /// The related grid on a detail screen: the first `limit` of the gallery's
     /// related IDs that still resolve (`related` can name galleries hitomi has
     /// since removed).
+    ///
+    /// Same contract as `galleryBlocks(_:)`: non-throwing, order preserving,
+    /// failures dropped.
     func relatedBlocks(_ ids: [Int], limit: Int = 20) async -> [GalleryBlock] {
         guard limit > 0, !ids.isEmpty else { return [] }
         let slice = Array(ids.prefix(limit))

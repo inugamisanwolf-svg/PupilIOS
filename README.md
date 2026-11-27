@@ -84,13 +84,52 @@ Windows / Linux からビルドする場合、`swiftc` が無い環境ではロ�
 
 ## IPA の入手とインストール
 
-1. Actions の該当 run から artifact **`PupilIOS-unsigned-ipa`** をダウンロード
-   （要ログイン。API から落とす場合は `python scripts/ci.py artifact` → `dist/PupilIOS-unsigned.ipa`）。
-2. artifact は zip なので展開し、中の `PupilIOS-unsigned.ipa` を取り出す。
-3. PC に [Sideloadly](https://sideloadly.io/)（Windows / macOS）を入れ、iPhone を USB 接続。
-4. `PupilIOS-unsigned.ipa` を Sideloadly にドラッグし、Apple ID を入力して Start。
+### 1. artifact `PupilIOS-unsigned-ipa` を取り出す
+
+CI が green になった run の artifact を、次のどれかで取得します。
+
+**(a) 同梱のドライバ（推奨・このマシンで実績あり）**
+
+```powershell
+# 最新の成功 run から取得して dist/ に展開する（zip も dist/ に残る）
+python scripts/ci.py artifact
+
+# run を指定する場合
+python scripts/ci.py artifact --run-id <RUN_ID>
+
+# ビルドから回す場合（dispatch → 完了待ち → 失敗なら error: 抽出 / 成功なら artifact 回収）
+python scripts/ci.py run
+```
+
+取得物:
+
+```
+dist/PupilIOS-unsigned-ipa.zip   # artifact そのまま（zip）
+dist/PupilIOS-unsigned.ipa       # 展開済みの実体。これを Sideloadly に渡す
+```
+
+**(b) ブラウザから**
+
+Actions → `ios-build` → 対象 run → ページ下部 **Artifacts → `PupilIOS-unsigned-ipa`**。
+
+**(c) `gh` CLI**
+
+`gh run download <RUN_ID> -n PupilIOS-unsigned-ipa`
+
+> 注意: このリポジトリを開発しているマシンには `gh` が入っていません。代わりに `scripts/ci.py` が
+> Windows 資格情報マネージャの GitHub トークン（`repo` / `workflow` スコープ）を使って
+> `git credential fill` 経由で取得します。トークンを画面やログに出すことはありません。
+
+検証済みの例（run 45971863687）: `dist/PupilIOS-unsigned.ipa` = **1,130,658 bytes**、
+sha256 `abe5d31ef62dca4060174e6addabcc325fd351a59d37b904a4505ce36ff00fc7`。
+同じファイルが `C:\Users\kaito\Downloads\PupilIOS-unsigned.ipa` にも置いてあります。
+
+### 2. サイドロードする
+
+1. PC に [Sideloadly](https://sideloadly.io/)（Windows / macOS）を入れ、iPhone を USB 接続。
+2. `PupilIOS-unsigned.ipa` を Sideloadly にドラッグし、Apple ID を入力して Start。
    署名は Sideloadly 側で行われます（このリポジトリの IPA は**署名なし**です）。
-5. iPhone 側で **設定 → 一般 → VPN とデバイス管理** から開発者プロファイルを信頼。
+3. iPhone 側で **設定 → 一般 → VPN とデバイス管理** から開発者プロファイルを信頼。
    iOS 16 以降は **設定 → プライバシーとセキュリティ → デベロッパモード** を ON にして再起動。
 
 無料の Apple ID の場合:
@@ -133,6 +172,20 @@ AltStore / SideStore を使うと、同じ Wi-Fi 内で 7 日ごとの自動再�
   遅い場合があります。
 - 署名が切れると起動時に「開発元を信頼できません」系のダイアログで落ちます。再署名して
   入れ直してください（アプリ内データは引き継がれません）。
+
+## 検証状況
+
+| 項目 | 状態 |
+|---|---|
+| コンパイル（Swift 5 / iOS 16.0 SDK / Xcode 16.4） | **CI で確認済み**（`ios-build` green、`error:` 0） |
+| XcodeGen プロジェクト生成・署名なしビルド | **CI で確認済み** |
+| IPA パッケージング（`Payload/` + zip）と artifact 生成 | **CI で確認済み** |
+| バンドル内容（`Assets.car` / `tags/*.json` / `astryx/*` のディレクトリ構造） | **CI artifact を展開して確認済み** |
+| hitomi.la エンドポイントの到達性 | 移植元の仕様に準拠（`[文献]` 移植元 Kotlin 実装） |
+| **実機（iPhone）でのランタイム挙動** | **未検証** — 下記の既知の制限を参照 |
+
+このリポジトリの CI は「ビルドが通って IPA が出る」ところまでを保証します。UI の操作感、
+ジェスチャ競合、通信の実挙動は実機での確認が必要です（未検証のものを未検証と書いています）。
 
 ## 既知の制限
 

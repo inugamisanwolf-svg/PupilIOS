@@ -53,7 +53,7 @@ struct SearchView: View {
         VStack(spacing: 0) {
             searchField
 
-            if !text.isEmpty && (!suggestions.isEmpty || !localSuggestions.isEmpty) {
+            if showsSuggestions {
                 suggestionList
             }
 
@@ -61,10 +61,19 @@ struct SearchView: View {
                 headerSection
                 Spacer(minLength: 0)
             } else {
-                GalleryGrid(model: model, emptyMessage: "「\(submitted)」に一致するギャラリーはありません")
+                GalleryGrid(
+                    model: model,
+                    emptyMessage: "「\(submitted)」に一致するギャラリーはありません。\n空白を含むタグは female:big_breasts のように名前空間を付けるとヒットします。"
+                )
             }
         }
         .background(theme.background)
+    }
+
+    /// 入力中だけサジェストを出す（送信済みの結果の上に被せない）。
+    private var showsSuggestions: Bool {
+        if text.isEmpty || text == submitted { return false }
+        return !suggestions.isEmpty || !localSuggestions.isEmpty
     }
 
     private var searchField: some View {
@@ -203,14 +212,19 @@ struct SearchView: View {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
 
-        text = trimmed
-        submitted = trimmed
-        suggestions = []
-        localSuggestions = []
         library.addSearchHistory(trimmed)
 
+        // 履歴は正規化された綴り（`Female:Big Breasts` → `female:big_breasts`）で
+        // 保存される。検索もその綴りで走らせて、チップと実際のクエリを一致させる。
+        let canonical = library.searchHistory.first ?? trimmed
+
+        text = canonical
+        submitted = canonical
+        suggestions = []
+        localSuggestions = []
+
         await model.configureAndStart(
-            source: .search(text: trimmed, sort: settings.sortMode),
+            source: .search(text: canonical, sort: settings.sortMode),
             perPage: settings.perPage
         )
     }

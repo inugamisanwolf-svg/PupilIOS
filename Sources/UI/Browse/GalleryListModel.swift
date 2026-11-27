@@ -251,31 +251,13 @@ final class GalleryListModel: ObservableObject {
 
     /// ページ分の `GalleryBlock` を並列取得し、**ID の順**で返す。
     /// 取得できなかった ID は落とす（一覧に穴を開けない）。
+    ///
+    /// 実際の並列数は `HitomiClient.galleryBlocks(_:)` 側の同時 6 に抑えられている
+    /// （1 枚ごとに gallery.js ＋ サムネ URL 解決が走るため、無制限だと叩きすぎる）。
     nonisolated static func fetchBlocks(ids: [Int]) async -> [GalleryBlock] {
         let unique = GalleryListModel.uniqueIDs(ids)
         if unique.isEmpty { return [] }
-
-        var fetched: [Int: GalleryBlock] = [:]
-        await withTaskGroup(of: (Int, GalleryBlock?).self) { group in
-            for id in unique {
-                group.addTask {
-                    let block = try? await HitomiClient.shared.galleryBlock(id)
-                    return (id, block)
-                }
-            }
-            for await result in group {
-                if let block = result.1 {
-                    fetched[result.0] = block
-                }
-            }
-        }
-
-        var ordered: [GalleryBlock] = []
-        ordered.reserveCapacity(unique.count)
-        for id in unique {
-            if let block = fetched[id] { ordered.append(block) }
-        }
-        return ordered
+        return await HitomiClient.shared.galleryBlocks(unique)
     }
 
     nonisolated static func uniqueIDs(_ ids: [Int]) -> [Int] {

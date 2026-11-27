@@ -59,8 +59,25 @@ python _probe/verify.py     # 実行してこのファイルを再生成
   `URLSession` が `Content-Range` を透過的に処理する場合、`offset` がずれる可能性は残る。
 - pagination の上限（`nozomi` 全件読み）は実機メモリで未検証。
 
+## CI（macos-15 / Xcode 16.4）で見つかって直した型エラー
 
-## 実行結果（2026-11-27 18:11:30）
+`swiftc` が手元に無いので、この2件は CI の実ビルドでしか検出できなかった。
+
+1. `Sources/Hitomi/Query.swift:3` — `error: recursive enum 'SearchQuery' is not marked 'indirect'`
+   → `indirect enum SearchQuery`。`.and([SearchQuery])` / `.or` / `.not` を持つので必須。
+2. `Sources/Hitomi/HitomiCore.swift:160` — `error: cannot use optional chaining on non-optional value of type 'FlexibleString'`
+   → `try? container.decodeIfPresent(...)` の型は Swift 5 で**平坦化されて** `FlexibleString?` に
+   なるので、`guard let wrapped` の後は `wrapped.value`（`wrapped?.value` は不可）。
+
+同型（`try?` + `??` / `?.`）の全数確認結果:
+- `try? c.decodeIfPresent([T].self, forKey:)` は 9 箇所（Models.swift 162-170）。
+  戻り値は `[T]?` に平坦化されるので、`[T]?` プロパティへそのまま代入でき、`?.` も `??` も不要。**問題なし**。
+- `try? await thumbnailURL(...)` → `URL?`、`try? await galleryBlock(id)` → `GalleryBlock?`。同じく平坦化。**問題なし**。
+- それ以外に `try?` を受けて `?.` / `??` を付けている箇所は 0（`grep "try\?.*\?\."`）。
+
+
+
+## 実行結果（2026-11-27 18:14:08）
 
 97/97 checks passed
 
