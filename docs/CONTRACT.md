@@ -124,7 +124,7 @@ final class ImageCache {
 | 担当 | ファイル |
 |---|---|
 | ui-shell | `Sources/App/PupilIOSApp.swift`, `Sources/UI/Root/RootView.swift`, `Sources/UI/Root/SettingsView.swift` |
-| ui-browse | `Sources/UI/Browse/BrowseView.swift`, `Sources/UI/Browse/GalleryListModel.swift`, `Sources/UI/Browse/GalleryCard.swift`, `Sources/UI/Search/SearchView.swift`, `Sources/UI/Detail/GalleryDetailView.swift`, `Sources/UI/Common/RemoteImage.swift`, `Sources/UI/Common/GridColumns.swift`, `Sources/UI/Library/FavoritesView.swift`, `Sources/UI/Library/HistoryView.swift` |
+| ui-browse | `Sources/UI/Browse/BrowseView.swift`, `Sources/UI/Browse/GalleryListModel.swift`, `Sources/UI/Browse/GalleryCard.swift`, `Sources/UI/Search/SearchView.swift`, `Sources/UI/Detail/GalleryDetailView.swift`, `Sources/UI/Common/RemoteImage.swift`, `Sources/UI/Common/GridColumns.swift`, `Sources/UI/Common/GalleryGrid.swift`（4画面で共有するグリッド+フッター+refresh。Lead 承認済み）, `Sources/UI/Library/FavoritesView.swift`, `Sources/UI/Library/HistoryView.swift` |
 | ui-reader | `Sources/UI/Reader/ReaderView.swift`, `Sources/UI/Reader/ZoomablePageView.swift`, `Sources/UI/Reader/ReaderOverlay.swift` |
 | astryx-design | `Sources/DesignSystem/**`, `Resources/astryx/**`, `design/**`, `docs/ASTRYX.md` |
 | core-api | `Sources/Hitomi/**`, `Sources/Store/**` |
